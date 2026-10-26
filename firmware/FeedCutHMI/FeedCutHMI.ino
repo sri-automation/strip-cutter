@@ -8,6 +8,7 @@
     D5  -> relay IN for the wiper motor (0 V = motor ON)              [was D10]
     D6  -> optional buzzer (+), active buzzer, other leg to GND
     A0  <- STOP / BACK button   A1 <- UP button   A2 <- DOWN button   A3 <- OK / START button
+           (arrow-key front panel v2: LEFT = A0, UP = A1, DOWN = A2, RIGHT = A3)
            (each button between the pin and GND, no resistors needed)
     TFT 1.8" ST7735:  SCK D13, SDA D11, A0/DC D9, RESET D8, CS D10, LED 3.3 V, VCC 5 V, GND
     D0/D1 = serial: to the ESP8266 (DIP 1+2 ON) or to the PC over USB (DIP 3+4 ON)
@@ -17,6 +18,8 @@
     While cutting: STOP = stop after this piece (knife parks at the top), STOP again = stop now
                    UP / DOWN = feed 10 ms later / earlier
     Menus: UP / DOWN move, OK chooses, STOP goes back. Values: hold UP / DOWN to go faster.
+    Wi-Fi & remote -> Wi-Fi details: UP / DOWN page (now, saved networks, in range),
+                   OK = try the saved networks again, STOP = back.
 
   Serial (115200): commands must be framed as  @COMMAND*HH  where HH is the XOR of the command
   characters in hex (for example @G*47). This keeps random characters - like the Wi-Fi module's
@@ -28,7 +31,9 @@
     F / Fn feed test   C feed until X   R roller one turn   J jog mm   Z default settings
     I wifi status from the ESP8266: I<state>,<rssi>,<ip>,<ssid>,<cloud>
   Lines this sketch sends that start with $ are for the Wi-Fi module:  $AP open the setup hotspot,
-  $FORGET forget the saved networks and reset the machine password (both from the Wi-Fi & remote menu).
+  $FORGET forget the saved networks and reset the machine password (both from the Wi-Fi & remote menu),
+  $WD<page>[F] send the rows of the Wi-Fi details page, $WJ try the saved networks again now.
+  The module answers with framed rows  Y<row><colour><text>  that this sketch only draws.
   Status lines start with #:  #B version  #S state  #P count total  #F test feeds  #C settings
                               #O offset  #M timing  #T knife at top  #A auto start  #K park  #R remote
 */
@@ -49,7 +54,7 @@ const unsigned int SETTLE_MS = 300;
 const unsigned int NUDGE_SETTLE_MS = 180;
 const byte  MAX_NUDGES = 60;
 const unsigned int PULSE_US = 8;
-#define VERSION_TEXT "5.0"
+#define VERSION_TEXT "5.1"
 
 // ---------------- settings kept in EEPROM ----------------
 struct Cfg {
@@ -128,6 +133,7 @@ void uiSetup();
 void uiIdle();
 bool uiAutoStartWait();
 void uiSplashEnd();
+void wifiDetail(const char *p);
 #define D_HEAD  0x01
 #define D_COUNT 0x02
 #define D_INFO  0x04
@@ -339,7 +345,7 @@ void quickKeys() {                       // while something is running: stop key
     else if (c == '!') { abortAsked = true; stopAsked = true; motor(false); }
     else if ((c == '+' || c == '-') && running && cfg.remote) { cfg.offsetMs += c == '+' ? 10 : -10; Serial.print(F("#O ")); Serial.println(cfg.offsetMs); uiDirty(D_INFO); }
     else if (c == 'I') wifiInfo(lineBuf + 1);
-    else if (c != '?') Serial.println(F("busy"));
+    else if (c != '?' && c != 'Y') Serial.println(F("busy"));
   }
   uiBusyButtons();
   buzzTick();
@@ -799,6 +805,7 @@ void dispatch(char *s) {
   bool has = s[1] != 0;
   if (c == '?') { showStatus(); sayCount(); return; }
   if (c == 'I') { wifiInfo(s + 1); return; }
+  if (c == 'Y') { wifiDetail(s + 1); return; }       // a row of the Wi-Fi details page
   if (c == '!') { motor(false); Serial.println(F("cutter motor is off")); state(ST_IDLE); return; }
   if (c == 'X') { Serial.println(F("nothing is running")); return; }
   if (!cfg.remote) {                       // the machine panel has locked remote control

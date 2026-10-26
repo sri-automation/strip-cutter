@@ -19,6 +19,10 @@
       most one try a minute). The machine itself never needs Wi-Fi to run or to stop.
     - Firmware update over Wi-Fi: Arduino IDE network port (machine password), only while the
       machine is idle.
+    - Wi-Fi details for the machine's screen (Wi-Fi & remote -> Wi-Fi details): the state, why the
+      last join failed (password refused, not in range, no answer, no address ...), every saved
+      network with its signal, and the networks in range. The module looks at every access point
+      it hears and always keeps the saved ones, even where more than 24 networks are around.
 
   Arduino IDE settings (Tools menu)
     Board: "Generic ESP8266 Module"   Flash size: "4MB (FS:none OTA:~1019KB)"   CPU: 160 MHz
@@ -135,6 +139,11 @@ void hwAction(uint8_t what, uint8_t id) {
 
 // ---------------- Wi-Fi: best saved network, setup hotspot ----------------
 enum { W_DOWN, W_JOINING, W_UP };
+// what the radio says while joining: why it dropped, and whether it got as far as associating
+WiFiEventHandler evDisc, evConn;
+volatile uint16_t discReason = 0;
+volatile bool assoc = false;
+bool joinEnc = false;                    // the network being joined is locked (needs a password)
 uint8_t wst = W_DOWN;
 int8_t wNet = -1;
 uint32_t wNext = 0, wJoinStart = 0, wDownSince = 0, roamNext = 0;
@@ -145,6 +154,8 @@ bool apOn = false, apManual = false;
 uint32_t apOffAt = 0;
 
 void netShow() {                         // what the ATmega's screen and the apps see
+  wd.phase = wst == W_UP ? P_UP : wst == W_JOINING ? P_JOIN : scanning ? P_SCAN : P_DOWN;
+  if (wst == W_UP) wd.ch = WiFi.channel();
   bool showAp = apOn && (apManual || wst != W_UP);
   net.apOn = apOn;
   net.apClients = apOn ? WiFi.softAPgetStationNum() : 0;
@@ -191,16 +202,45 @@ void startScan(uint8_t why) {
   scanning = true; scanStartedAt = millis();
 }
 
+void beginJoin(int k, const ScanItem &it) {
+  discReason = 0; assoc = false; joinEnc = it.enc;
+  coreDiagJoin(k);
+  WiFi.begin(cfg.nets[k].ssid, cfg.nets[k].pass, it.ch, it.bssid, true);
+  wst = W_JOINING; wNet = k; wJoinStart = millis();
+}
+
 void joinBest(const ScanItem *items, int n) {
   int k, i = corePickNet(items, n, &k);
   if (i < 0) { wNext = millis() + (apOn && net.apClients ? 60000 : 15000); return; }
-  WiFi.begin(cfg.nets[k].ssid, cfg.nets[k].pass, items[i].ch, items[i].bssid, true);
-  wst = W_JOINING; wNet = k; wJoinStart = millis();
+  beginJoin(k, items[i]);
+}
+
+// how a join ended, from the Wi-Fi status and the last reason the radio gave
+uint8_t joinResult(wl_status_t s, bool timedOut) {
+  if (wNet >= 0 && !cfg.nets[wNet].pass[0] && joinEnc) return R_NEEDPASS;
+  if (s == WL_WRONG_PASSWORD) return R_PASS;
+  switch (discReason) {
+    case WIFI_DISCONNECT_REASON_NO_AP_FOUND: return R_NOTSEEN;
+    case WIFI_DISCONNECT_REASON_AUTH_EXPIRE: case WIFI_DISCONNECT_REASON_MIC_FAILURE:
+    case WIFI_DISCONNECT_REASON_4WAY_HANDSHAKE_TIMEOUT: case WIFI_DISCONNECT_REASON_HANDSHAKE_TIMEOUT:
+    case WIFI_DISCONNECT_REASON_802_1X_AUTH_FAILED: case WIFI_DISCONNECT_REASON_AUTH_FAIL: return R_PASS;
+    case WIFI_DISCONNECT_REASON_BEACON_TIMEOUT: return R_NOANSWER;
+    case WIFI_DISCONNECT_REASON_AUTH_LEAVE: case WIFI_DISCONNECT_REASON_ASSOC_EXPIRE: case WIFI_DISCONNECT_REASON_ASSOC_TOOMANY:
+    case WIFI_DISCONNECT_REASON_NOT_AUTHED: case WIFI_DISCONNECT_REASON_NOT_ASSOCED: case WIFI_DISCONNECT_REASON_ASSOC_NOT_AUTHED:
+    case WIFI_DISCONNECT_REASON_IE_INVALID: case WIFI_DISCONNECT_REASON_GROUP_CIPHER_INVALID: case WIFI_DISCONNECT_REASON_PAIRWISE_CIPHER_INVALID:
+    case WIFI_DISCONNECT_REASON_AKMP_INVALID: case WIFI_DISCONNECT_REASON_UNSUPP_RSN_IE_VERSION: case WIFI_DISCONNECT_REASON_INVALID_RSN_IE_CAP:
+    case WIFI_DISCONNECT_REASON_CIPHER_SUITE_REJECTED: case WIFI_DISCONNECT_REASON_ASSOC_FAIL: return R_REFUSED;
+    default: break;
+  }
+  if (s == WL_NO_SSID_AVAIL) return R_NOTSEEN;
+  if (timedOut) return assoc ? R_NOIP : (discReason ? R_FAIL : R_NOANSWER);
+  return R_FAIL;
 }
 
 void onUp() {
   wst = W_UP;
   coreNetOk(wNet);
+  coreDiagJoin(wNet); coreDiagResult(wNet, R_OK, 0);
   roamNext = millis() + 300000;
   if (apOn && !apManual) apOffAt = millis() + 180000;   // keep the hotspot 3 more minutes so the phone sees the new address
   static bool timeSet = false;
@@ -216,18 +256,32 @@ void onDown() {
 }
 
 void scanFinished(int n) {
-  int k = 0;
-  ScanItem *items = new (std::nothrow) ScanItem[n > 0 ? (n < 24 ? n : 24) : 1];
+  // keep at most 24 access points: the saved networks first, then the strongest others. (Where many
+  // networks are around, the radio's list is not in signal order, so a saved one could be lost.)
+  int total = n > 0 ? n : 0;
+  if (n > 100) n = 100;
+  uint8_t ord[100], sv[100]; int8_t rs[100]; int m = 0;
+  for (int i = 0; i < n; i++) { rs[i] = WiFi.RSSI(i); sv[i] = findNet(WiFi.SSID(i).c_str()) >= 0; ord[m++] = i; }
+  for (int a = 1; a < m; a++)
+    for (int b = a; b > 0; b--) {
+      uint8_t x = ord[b], y = ord[b - 1];
+      if (!(sv[x] > sv[y] || (sv[x] == sv[y] && rs[x] > rs[y]))) break;
+      ord[b] = y; ord[b - 1] = x;
+    }
+  int keep = m < 24 ? m : 24, k = 0;
+  ScanItem *items = new (std::nothrow) ScanItem[keep > 0 ? keep : 1];
   if (items) {
-    for (int i = 0; i < n && k < 24; i++) {
+    for (int j = 0; j < keep; j++) {
+      int i = ord[j];
       String s = WiFi.SSID(i);
       strncpy(items[k].ssid, s.c_str(), 32); items[k].ssid[32] = 0;
-      items[k].rssi = WiFi.RSSI(i); items[k].enc = WiFi.encryptionType(i) != ENC_TYPE_NONE; items[k].ch = WiFi.channel(i);
+      items[k].rssi = rs[i]; items[k].enc = WiFi.encryptionType(i) != ENC_TYPE_NONE; items[k].ch = WiFi.channel(i);
       memcpy(items[k].bssid, WiFi.BSSID(i), 6);
       k++;
     }
   }
   WiFi.scanDelete();
+  if (items) coreDiagScan(items, k, total);
   scanning = false; scanStuck = 0;
   uint8_t why = scanWhy; scanWhy = 0;
   if (!items) { wNext = millis() + 5000; return; }       // out of memory: try again later
@@ -238,8 +292,7 @@ void scanFinished(int n) {
     // a clearly stronger access point (same network name or another saved one)
     if (idx >= 0 && memcmp(items[idx].bssid, WiFi.BSSID(), 6) != 0 && coreShouldRoam(WiFi.RSSI(), items[idx].rssi)) {
       WiFi.disconnect(); onDown();
-      WiFi.begin(cfg.nets[best].ssid, cfg.nets[best].pass, items[idx].ch, items[idx].bssid, true);
-      wst = W_JOINING; wNet = best; wJoinStart = millis();
+      beginJoin(best, items[idx]);
     }
   }
   delete[] items;
@@ -263,14 +316,16 @@ void wifiTick() {
       break;
     case W_JOINING: {
       wl_status_t s = WiFi.status();
+      bool timedOut = now - wJoinStart > 15000;
       if (up) onUp();
-      else if (now - wJoinStart > 15000 || s == WL_CONNECT_FAILED || s == WL_WRONG_PASSWORD) {
+      else if (timedOut || s == WL_CONNECT_FAILED || s == WL_WRONG_PASSWORD) {
+        coreDiagResult(wNet, joinResult(s, timedOut), discReason);
         coreNetFailed(wNet); WiFi.disconnect(); wst = W_DOWN; wNext = now + 500;
       }
       break;
     }
     case W_UP:
-      if (!up) onDown();
+      if (!up) { coreDiagResult(wNet, R_LOST, discReason); onDown(); }
       else if ((int32_t)(now - roamNext) >= 0) {
         roamNext = now + 300000;
         if (WiFi.RSSI() < -70 && coreMachineIdle() && !scanning) startScan(2);
@@ -453,6 +508,8 @@ void setup() {
 
   WiFi.persistent(false);
   WiFi.setAutoReconnect(false);
+  evDisc = WiFi.onStationModeDisconnected([](const WiFiEventStationModeDisconnected &e) { discReason = e.reason; });
+  evConn = WiFi.onStationModeConnected([](const WiFiEventStationModeConnected &) { assoc = true; });
   WiFi.mode(WIFI_STA);
   WiFi.hostname(cfg.name);
   WiFi.setSleepMode(WIFI_NONE_SLEEP);

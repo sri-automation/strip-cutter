@@ -52,7 +52,7 @@ enum {   // values
   // read-only
   I_WIFI, I_SSID, I_IP, I_RSSI, I_CLOUD, I_TURN, I_TOTAL, I_VER,
   // actions
-  A_START, A_RESETN, A_F1, A_FC, A_K, A_H, A_JF, A_JB, A_R, A_W, A_DEF, A_AP, A_FORGET,
+  A_START, A_RESETN, A_F1, A_FC, A_K, A_H, A_JF, A_JB, A_R, A_W, A_DEF, A_AP, A_FORGET, A_WDET,
   // sub menus
   M_MAIN, M_TEST, M_CORR, M_PARK, M_WIFI, M_MACH
 };
@@ -65,7 +65,7 @@ MI(L_F1, "Feed one piece") MI(L_FC, "Feed until STOP") MI(L_K, "One cut + park")
 MI(L_JF, "Jog net +10 mm") MI(L_JB, "Jog net -10 mm") MI(L_R, "Roller one turn") MI(L_W, "Switch test")
 MI(L_U, "Factor") MI(L_V, "Offset") MI(L_D, "Switch-off lead") MI(L_E, "Nudge")
 MI(L_WST, "Status") MI(L_SSID, "Network") MI(L_IP, "Address") MI(L_RSSI, "Signal") MI(L_CLOUD, "Cloud")
-MI(L_REM, "Remote control") MI(L_AP, "Setup hotspot") MI(L_FORGET, "Forget Wi-Fi") MI(L_AUTO, "Auto start") MI(L_T, "Test rhythm") MI(L_TURN, "One turn") MI(L_TOT, "Total pieces")
+MI(L_WDET, "Wi-Fi details") MI(L_REM, "Remote control") MI(L_AP, "Setup hotspot") MI(L_FORGET, "Forget Wi-Fi") MI(L_AUTO, "Auto start") MI(L_T, "Test rhythm") MI(L_TURN, "One turn") MI(L_TOT, "Total pieces")
 MI(L_TFT, "Screen type") MI(L_FLIP, "Flip screen") MI(L_DEF, "Factory settings") MI(L_VER, "Version")
 MI(L_SETTINGS, "SETTINGS")
 
@@ -79,7 +79,7 @@ const MItem TEST_ITEMS[] PROGMEM = {
 const MItem CORR_ITEMS[] PROGMEM = { {L_U, K_VAL, V_U}, {L_V, K_VAL, V_V} };
 const MItem PARK_ITEMS[] PROGMEM = { {L_D, K_VAL, V_D}, {L_E, K_VAL, V_E}, {L_H, K_ACT, A_H} };
 const MItem WIFI_ITEMS[] PROGMEM = {
-  {L_WST, K_INFO, I_WIFI}, {L_SSID, K_INFO, I_SSID}, {L_IP, K_INFO, I_IP}, {L_RSSI, K_INFO, I_RSSI},
+  {L_WDET, K_ACT, A_WDET}, {L_WST, K_INFO, I_WIFI}, {L_SSID, K_INFO, I_SSID}, {L_IP, K_INFO, I_IP}, {L_RSSI, K_INFO, I_RSSI},
   {L_CLOUD, K_INFO, I_CLOUD}, {L_REM, K_TOG, T_REMOTE}, {L_AP, K_ACT, A_AP}, {L_FORGET, K_ACT, A_FORGET} };
 const MItem MACH_ITEMS[] PROGMEM = {
   {L_AUTO, K_TOG, T_AUTO}, {L_T, K_VAL, V_T}, {L_TURN, K_INFO, I_TURN}, {L_TOT, K_INFO, I_TOTAL},
@@ -88,10 +88,10 @@ const MItem MACH_ITEMS[] PROGMEM = {
 struct Menu { const char *title; const MItem *items; uint8_t n; };
 const Menu MENUS[] PROGMEM = {
   {L_SETTINGS, MAIN_ITEMS, 13}, {L_TESTS, TEST_ITEMS, 8}, {L_CORR, CORR_ITEMS, 2},
-  {L_PARK, PARK_ITEMS, 3}, {L_WIFI, WIFI_ITEMS, 8}, {L_MACH, MACH_ITEMS, 8} };
+  {L_PARK, PARK_ITEMS, 3}, {L_WIFI, WIFI_ITEMS, 9}, {L_MACH, MACH_ITEMS, 8} };
 
 // ---------------- page state ----------------
-enum { SC_HOME, SC_MENU, SC_EDIT, SC_CONFIRM, SC_FAULT };
+enum { SC_HOME, SC_MENU, SC_EDIT, SC_CONFIRM, SC_FAULT, SC_WIFI };
 byte screen = SC_HOME, dirty = D_ALL;
 byte menuId = 0, sel = 0, top = 0, parentSel = 0;     // menuId 0..5 = M_MAIN..M_MACH
 byte editId = 0, confirmId = 0;
@@ -99,6 +99,8 @@ float editVal = 0;
 unsigned long okHoldMs = 0;
 byte shownDigits = 0;
 bool splashOn = false;
+byte wdPage = 0;                         // Wi-Fi details: page 0 now, 1 saved networks, 2 in range
+unsigned long wdAsk = 0;
 #define ROWS 7
 
 void uiDirty(byte what) { dirty |= what; }
@@ -213,10 +215,11 @@ void drawIcons(uint16_t bg) {            // right end of the header: remote lock
 
 void drawHeader() {
   uint16_t bg; const __FlashStringHelper *t;
-  if (screen == SC_MENU || screen == SC_EDIT || screen == SC_CONFIRM) {
+  if (screen == SC_MENU || screen == SC_EDIT || screen == SC_CONFIRM || screen == SC_WIFI) {
     bg = C_BLUE;
     if (screen == SC_EDIT) t = (const __FlashStringHelper *)menuItem(menuId, sel).label;
     else if (screen == SC_CONFIRM) t = F("ARE YOU SURE?");
+    else if (screen == SC_WIFI) t = F("WI-FI  /3");
     else t = (const __FlashStringHelper *)pgm_read_ptr(&MENUS[menuId].title);
   } else {
     bg = stateColour();
@@ -227,6 +230,7 @@ void drawHeader() {
   fillRect(0, 0, 118, 18, bg);
   byte s = lenP(t) <= 9 ? 2 : 1;
   drawTextP(4, s == 2 ? 2 : 6, t, fg, bg, s);
+  if (screen == SC_WIFI) drawChar(76, 2, '1' + wdPage, fg, bg, 2);   // the page number in "WI-FI  /3"
   drawIcons(bg);
   fillRect(118, 0, 42, 2, bg); fillRect(118, 16, 42, 2, bg);
 }
@@ -237,6 +241,7 @@ void drawFooter() {
   if (screen == SC_MENU) h = F(SYM_UP SYM_DOWN " move  OK pick STOP back");
   else if (screen == SC_EDIT) h = F(SYM_UP SYM_DOWN " set  OK save  STOP undo");
   else if (screen == SC_CONFIRM) h = F("OK = yes      STOP = no");
+  else if (screen == SC_WIFI) h = F(SYM_UP SYM_DOWN " page OK retry STOP back");
   else if (screen == SC_FAULT) h = F("OK = clear");
   else if (curState == ST_IDLE) h = F("hold OK = START  " SYM_UP SYM_DOWN " MENU");
   else if (stopAsked) h = F("STOP again = stop now");
@@ -378,6 +383,30 @@ void drawFault() {
   if (faultMsg) drawWrapped(26, faultMsg, C_TEXT, 8);
 }
 
+// ---------------- Wi-Fi details: the Wi-Fi module writes the rows ----------------
+void wdRequest(bool full) {              // "$WD<page>" (F = send every row)
+  char b[6] = "$WD0F";
+  b[3] += wdPage; if (!full) b[4] = 0;
+  Serial.println(b);
+  wdAsk = millis();
+}
+
+void drawWifi() {
+  fillRect(0, 18, TFT_W, 98, C_BG);
+  if (!wifiState) drawWrapped(30, F("No word from the Wi-Fi module. DIP switches 1 and 2 ON, the others OFF?"), C_AMBER, 4);
+  wdRequest(true);
+}
+
+const uint16_t WD_COLS[] PROGMEM = { C_TEXT, C_DIM, C_GOLITE, C_AMBER, C_RED };
+void wifiDetail(const char *p) {         // "<row><colour><text>": one row of the page
+  if (screen != SC_WIFI || splashOn) return;
+  byte r = p[0] - '0', c = p[1] - '0';
+  if (r > 9 || c > 4) return;
+  int y = 21 + r * 9;
+  fillRect(0, y, TFT_W, 9, C_BG);
+  drawText(4, y, p + 2, pgm_read_word(&WD_COLS[c]), C_BG, 1);
+}
+
 void uiDraw() {                          // draws whatever has changed; short, can be called while running
   if (!dirty || splashOn) return;
   byte d = dirty; dirty = 0;
@@ -390,6 +419,7 @@ void uiDraw() {                          // draws whatever has changed; short, c
     if (screen == SC_MENU) drawMenu();
     else if (screen == SC_EDIT) drawEdit();
     else if (screen == SC_CONFIRM) drawConfirm();
+    else if (screen == SC_WIFI) drawWifi();
     else drawFault();
   }
   if (d & D_FOOT) drawFooter();
@@ -470,6 +500,7 @@ void doAction(byte id) {
     case A_R:  rollerTurn(); break;
     case A_W:  watchSwitch(); break;
     case A_AP: Serial.println(F("$AP")); break;                  // tells the Wi-Fi module to open its setup hotspot
+    case A_WDET: wdPage = 0; goScreen(SC_WIFI); return;
     case A_RESETN: case A_DEF: case A_FORGET: confirmId = id; goScreen(SC_CONFIRM); return;
   }
   if (curState != ST_FAULT && id != A_START) { parentSel = p; openMenu(m, s); }   // back to the list it came from
@@ -536,6 +567,12 @@ void uiIdle() {                          // navigation while nothing is running
       else if (e == E_BACK) goScreen(SC_MENU);
       break;
     }
+    case SC_WIFI:
+      if (e == E_UP || e == E_DOWN) { wdPage = (wdPage + (e == E_DOWN ? 1 : 2)) % 3; goScreen(SC_WIFI); }
+      else if (e == E_OK) Serial.println(F("$WJ"));            // try the saved networks again, scan again
+      else if (e == E_BACK) openMenu(M_WIFI - M_MAIN, 0);
+      else if (millis() - wdAsk > 3000) wdRequest(false);     // keep the page live: only changed rows come
+      break;
     case SC_CONFIRM:
       if (e == E_OK) {
         if (confirmId == A_RESETN) { made = 0; saveCount(); sayCount(); showStatus(); }

@@ -68,6 +68,8 @@ The full steps, wiring and DIP-switch table are in the [electronics guide](https
    - Join it with a phone and add your 2.4 GHz Wi-Fi networks on the Wi-Fi tab.
    - Then change the machine password.
 
+If the machine does not join your Wi-Fi, open **Wi-Fi & remote → Wi-Fi details** on its screen. It shows why (password refused, not in range, no answer, no address ...), every saved network with its signal, and the networks it can hear. OK there tries again.
+
 Buttons on the v2 front panel:
 
 | Button | Pin | Does |

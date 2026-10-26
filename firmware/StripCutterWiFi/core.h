@@ -10,6 +10,10 @@
 //   module -> app   every line from the ATmega as it is, plus "$..." lines from this module:
 //                   $HELLO nonce name version   $AUTH ok|bad   $W {wifi status}   $L {saved settings}
 //                   $N [scan]   $OK text   $ERR text   $NONCE n   $SNAP 1 ... $SNAP 0 (state replay)
+//   ATmega -> module  $AP (open the hotspot)  $FORGET  $WD<page>[F] (Wi-Fi details page; F = all rows)
+//                     $WJ (try the saved networks again now)
+//   module -> ATmega  framed lines: I<state>,<rssi>,<ip>,<ssid>,<cloud>   Y<row><colour><text> (a row
+//                     of the Wi-Fi details page: row 0-9, colour 0 text 1 dim 2 green 3 amber 4 red)
 //   Local app login: $AUTH<tab>hex(HMAC-SHA256(password, "auth:" + nonce))[0..31]
 //   Cloud commands are signed: first line "$SIG<tab>nonce<tab>seq<tab>mac", then the lines,
 //   mac = hex(HMAC-SHA256(password, nonce + "\t" + seq + "\n" + lines))[0..31]. The nonce comes
@@ -21,8 +25,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
+#include <stdarg.h>
 
-#define ESP_VERSION "1.0"
+#define ESP_VERSION "1.1"
 #define MAX_NETS 8
 #define MAX_WS 5                     // WebSocket clients (the library's limit on the ESP8266)
 #define CLOUD_ID 9                   // client number used for the cloud link
@@ -181,7 +186,7 @@ static uint32_t avrSeenAt = 0, avrBootAt = 0, lastProbe = 0;
 static bool avrEver = false;
 
 // lines waiting to go to the ATmega, one every 100 ms so its 64-byte buffer never overflows
-#define QN 12
+#define QN 20
 static char txq[QN][AVR_LINE_MAX + 4];
 static uint8_t qHead = 0, qCount = 0;
 static uint32_t lastTx = 0;
@@ -200,6 +205,21 @@ static uint32_t lastSnap = 0, lastNonceReply = 0; static bool snapDirty = true;
 
 // joining: networks that just failed wait a while
 static uint32_t failUntil[MAX_NETS];
+
+// what the module found out about Wi-Fi, for the machine's screen (kept in RAM only)
+enum { R_NONE, R_OK, R_PASS, R_NOTSEEN, R_NOANSWER, R_REFUSED, R_NOIP, R_LOST, R_NEEDPASS, R_FAIL };
+enum { P_DOWN, P_SCAN, P_JOIN, P_UP };
+#define NSEENLIST 8
+struct SeenNet { char ssid[21]; int8_t rssi; uint8_t enc, saved; };
+struct WifiDiag {
+  uint8_t phase, ch;                       // P_DOWN .. P_UP, radio channel while connected
+  int8_t joinNet;                          // saved network being joined or in use (-1 none)
+  int8_t lastNet; uint8_t lastRes; uint16_t lastCode; uint32_t lastAt;   // the last join try and how it ended
+  uint32_t scanAt; uint8_t scanCount, nSeen; // last scan: when, how many access points
+  SeenNet seen[NSEENLIST];                 // the strongest names in the last scan
+  int8_t rssi[MAX_NETS]; uint8_t inScan[MAX_NETS], res[MAX_NETS], enc[MAX_NETS];   // per saved network
+};
+static WifiDiag wd;
 
 // =====================================================================================
 // small helpers
@@ -340,6 +360,53 @@ static int findNet(const char *ssid) {
   return -1;
 }
 
+// ---- Wi-Fi details: the sketch reports what happens, the screen pages show it ----
+// one scan: it holds up to 24 access points (saved networks first), total = how many were heard
+void coreDiagScan(const ScanItem *it, int n, int total) {
+  wd.scanAt = nowMs(); if (!wd.scanAt) wd.scanAt = 1;
+  wd.scanCount = total > 255 ? 255 : (uint8_t)total;
+  for (uint8_t k = 0; k < MAX_NETS; k++) { wd.inScan[k] = 0; wd.rssi[k] = 0; }
+  for (int i = 0; i < n; i++) {
+    int k = findNet(it[i].ssid);
+    if (k >= 0 && (!wd.inScan[k] || it[i].rssi > wd.rssi[k])) { wd.inScan[k] = 1; wd.rssi[k] = it[i].rssi; wd.enc[k] = it[i].enc; }
+  }
+  int order[24]; int m = 0;                  // one entry per name, strongest first
+  for (int i = 0; i < n && m < 24; i++) {
+    if (!it[i].ssid[0]) continue;            // hidden network
+    int dup = -1;
+    for (int j = 0; j < m; j++) if (!strcmp(it[order[j]].ssid, it[i].ssid)) dup = j;
+    if (dup >= 0) { if (it[i].rssi > it[order[dup]].rssi) order[dup] = i; continue; }
+    order[m++] = i;
+  }
+  for (int a = 1; a < m; a++) for (int b = a; b > 0 && it[order[b]].rssi > it[order[b - 1]].rssi; b--) { int t = order[b]; order[b] = order[b - 1]; order[b - 1] = t; }
+  wd.nSeen = m < NSEENLIST ? m : NSEENLIST;
+  for (uint8_t j = 0; j < wd.nSeen; j++) {
+    const ScanItem &s = it[order[j]];
+    strncpy(wd.seen[j].ssid, s.ssid, 20); wd.seen[j].ssid[20] = 0;
+    wd.seen[j].rssi = s.rssi; wd.seen[j].enc = s.enc; wd.seen[j].saved = findNet(s.ssid) >= 0;
+  }
+}
+void coreDiagJoin(int k) { wd.joinNet = (int8_t)k; }
+void coreDiagResult(int k, uint8_t res, uint16_t code) {
+  if (k < 0 || k >= MAX_NETS) return;
+  wd.res[k] = res; wd.lastNet = (int8_t)k; wd.lastRes = res; wd.lastCode = code; wd.lastAt = nowMs();
+}
+static void diagForget(int i) {              // saved network i was deleted: the later ones move up
+  for (int k = i; k + 1 < MAX_NETS; k++) { wd.rssi[k] = wd.rssi[k + 1]; wd.inScan[k] = wd.inScan[k + 1]; wd.res[k] = wd.res[k + 1]; wd.enc[k] = wd.enc[k + 1]; }
+  wd.rssi[MAX_NETS - 1] = 0; wd.inScan[MAX_NETS - 1] = 0; wd.res[MAX_NETS - 1] = R_NONE; wd.enc[MAX_NETS - 1] = 0;
+  if (wd.lastNet == i) wd.lastNet = -1; else if (wd.lastNet > i) wd.lastNet--;
+  if (wd.joinNet == i) wd.joinNet = -1; else if (wd.joinNet > i) wd.joinNet--;
+  for (uint8_t j = 0; j < wd.nSeen; j++) wd.seen[j].saved = findNet(wd.seen[j].ssid) >= 0;
+}
+static void diagSaved(int i) {               // saved network i is new or has a new password
+  wd.res[i] = R_NONE; wd.inScan[i] = 0; wd.rssi[i] = 0;
+  if (wd.lastNet == i) wd.lastNet = -1;
+  for (uint8_t j = 0; j < wd.nSeen; j++) {
+    bool same = strlen(cfg.nets[i].ssid) <= 20 && !strcmp(wd.seen[j].ssid, cfg.nets[i].ssid);
+    if (same) { wd.seen[j].saved = 1; if (wd.scanAt) { wd.inScan[i] = 1; wd.rssi[i] = wd.seen[j].rssi; wd.enc[i] = wd.seen[j].enc; } }
+  }
+}
+
 static void espCommand(uint8_t id, char *line) {
   char *p = strchr(line, '\t');
   if (p) *p++ = 0;
@@ -365,6 +432,7 @@ static void espCommand(uint8_t id, char *line) {
     }
     strcpy(cfg.nets[i].ssid, ssid); strcpy(cfg.nets[i].pass, pass);
     failUntil[i] = 0;
+    diagSaved(i);
     cfgStore();
     snprintf(msg, sizeof(msg), "$OK saved %s", ssid); sendTo(id, msg);
     sendAll(lJson());
@@ -377,6 +445,7 @@ static void espCommand(uint8_t id, char *line) {
     for (uint8_t k = i; k + 1 < cfg.nNets; k++) { cfg.nets[k] = cfg.nets[k + 1]; failUntil[k] = failUntil[k + 1]; }
     cfg.nNets--;
     memset(&cfg.nets[cfg.nNets], 0, sizeof(Net));
+    diagForget(i);
     cfgStore();
     snprintf(msg, sizeof(msg), "$OK removed %s", ssid); sendTo(id, msg);
     sendAll(lJson());
@@ -424,12 +493,183 @@ static void clientLine(uint8_t id, char *line) {
 }
 
 // =====================================================================================
+// Wi-Fi details pages for the machine's screen: 10 rows of 26 characters. Only rows that changed
+// are sent (one line every 100 ms through the queue), so a page that is open stays live cheaply.
+#define DIAG_ROWS 10
+#define DIAG_W 26
+static char diagRow[DIAG_ROWS][DIAG_W + 2];          // what the screen shows: colour digit + text
+static uint8_t diagShown = 255;
+enum { DC_TEXT = '0', DC_DIM = '1', DC_GREEN = '2', DC_AMBER = '3', DC_RED = '4' };
+
+static void dRow(char (*rows)[DIAG_W + 2], uint8_t r, char colour, const char *fmt, ...) {
+  if (r >= DIAG_ROWS) return;
+  char b[80];
+  va_list ap; va_start(ap, fmt); vsnprintf(b, sizeof(b), fmt, ap); va_end(ap);
+  rows[r][0] = colour;
+  uint8_t n = 0;
+  for (const char *s = b; *s && n < DIAG_W; s++) rows[r][1 + n++] = ((uint8_t)*s < 32 || (uint8_t)*s > 126) ? '?' : *s;
+  rows[r][1 + n] = 0;
+}
+static const char *quality(int r) { return r >= -55 ? "strong" : r >= -67 ? "good" : r >= -75 ? "weak" : "very weak"; }
+static void shortName(char *d, const char *s, uint8_t w) {     // name cut to w characters
+  uint8_t n = 0; for (; s[n] && n < w; n++) d[n] = s[n]; d[n] = 0;
+}
+static const char *ago(char *b, uint32_t since) {              // "12s" or "5m"
+  uint32_t s = (nowMs() - since) / 1000;
+  if ((int32_t)s < 0) s = 0;
+  if (s < 60) snprintf(b, 8, "%lus", (unsigned long)s); else snprintf(b, 8, "%lum", (unsigned long)(s / 60 > 999 ? 999 : s / 60));
+  return b;
+}
+static void dWrap(char (*rows)[DIAG_W + 2], uint8_t r, uint8_t lines, char colour, const char *s) {   // text over rows r..
+  for (uint8_t l = 0; l < lines && *s; l++) {
+    uint8_t n = strlen(s), cut = n;
+    if (n > DIAG_W) { cut = DIAG_W; while (cut > 0 && s[cut] != ' ') cut--; if (!cut) cut = DIAG_W; }
+    char b[DIAG_W + 1]; memcpy(b, s, cut); b[cut] = 0;
+    dRow(rows, r + l, colour, "%s", b);
+    s += cut; while (*s == ' ') s++;
+  }
+}
+// what a failed join means, in three short rows: title, hint, hint
+static void resText(uint8_t res, const char **t, const char **h1, const char **h2) {
+  *h1 = ""; *h2 = "";
+  switch (res) {
+    case R_PASS:     *t = "Password refused";          *h1 = "Check the password and";    *h2 = "that the router uses WPA2."; break;
+    case R_NOTSEEN:  *t = "Network not found";         *h1 = "Too far, hidden, or 5 GHz"; *h2 = "only. It needs 2.4 GHz.";    break;
+    case R_NOANSWER: *t = "No answer from the router"; *h1 = "Weak signal or a busy";     *h2 = "router. Move closer.";        break;
+    case R_REFUSED:  *t = "Router refused the join";   *h1 = "MAC filter, router full or"; *h2 = "WPA3-only. Check router.";  break;
+    case R_NOIP:     *t = "Joined, but got no IP";     *h1 = "The router gave no address"; *h2 = "(DHCP). Restart router."; break;
+    case R_LOST:     *t = "Connection lost";           *h1 = "Signal too weak here, or";  *h2 = "the router restarted.";       break;
+    case R_NEEDPASS: *t = "Needs a password";          *h1 = "It was saved without one,"; *h2 = "but the network is locked."; break;
+    default:         *t = "Join failed";               *h1 = "Check the router, then";    *h2 = "press OK to try again.";     break;
+  }
+}
+
+static void diagPage0(char (*rows)[DIAG_W + 2]) {          // now: state, address, the problem
+  uint32_t now = nowMs();
+  char nm[DIAG_W + 1];
+  if (wd.phase == P_UP) {
+    dRow(rows, 0, DC_GREEN, "Connected");
+    dRow(rows, 1, DC_TEXT, "%s", net.ssid);
+    dRow(rows, 2, DC_TEXT, "%d dBm %s, ch %u", net.rssi, quality(net.rssi), wd.ch);
+    dRow(rows, 3, DC_TEXT, "IP %s", net.ip);
+    dRow(rows, 4, DC_TEXT, "http://%s.local", cfg.name);
+    dRow(rows, 5, DC_DIM, net.apOn ? "Hotspot still on (3 min)" : "Hotspot off");
+    if (!cfg.cloudOn || !cfg.cloudHost[0]) dRow(rows, 6, DC_DIM, "Cloud: off");
+    else if (net.cloud == 2) dRow(rows, 6, DC_GREEN, "Cloud: online");
+    else { dRow(rows, 6, DC_AMBER, "Cloud: not connected"); dWrap(rows, 7, 2, DC_AMBER, net.cloudErr[0] ? net.cloudErr : "connecting"); }
+  } else {
+    if (wd.phase == P_JOIN && wd.joinNet >= 0 && wd.joinNet < cfg.nNets) { shortName(nm, cfg.nets[wd.joinNet].ssid, 14); dRow(rows, 0, DC_AMBER, "Joining %s...", nm); }
+    else if (wd.phase == P_SCAN) dRow(rows, 0, DC_AMBER, "Searching...");
+    else if (!cfg.nNets) dRow(rows, 0, DC_AMBER, "No Wi-Fi saved yet");
+    else dRow(rows, 0, DC_RED, "Not connected");
+    if (net.apOn) {
+      dRow(rows, 1, DC_TEXT, "Hotspot %s", AP_NAME);
+      dRow(rows, 2, DC_TEXT, "192.168.4.1, %u phone%s", net.apClients, net.apClients == 1 ? "" : "s");
+    } else dRow(rows, 1, DC_DIM, "Hotspot off");
+    bool anySeen = false;
+    for (uint8_t k = 0; k < cfg.nNets; k++) if (wd.inScan[k]) anySeen = true;
+    const char *t, *h1, *h2;
+    if (!cfg.nNets) {
+      dRow(rows, 3, DC_TEXT, "Join the hotspot with a");
+      dRow(rows, 4, DC_TEXT, "phone (password = machine");
+      dRow(rows, 5, DC_TEXT, "password), open the page,");
+      dRow(rows, 6, DC_TEXT, "add networks on Wi-Fi tab.");
+    } else if (wd.scanAt && !anySeen) {
+      dRow(rows, 3, DC_RED, "None of your %u network%s", cfg.nNets, cfg.nNets == 1 ? "" : "s");
+      dRow(rows, 4, DC_RED, "is in range.");
+      dRow(rows, 5, DC_DIM, "Too far, hidden, or 5 GHz");
+      dRow(rows, 6, DC_DIM, "only. It needs 2.4 GHz.");
+    } else if (wd.lastNet >= 0 && wd.lastNet < cfg.nNets && wd.lastRes != R_OK && wd.lastRes != R_NONE) {
+      shortName(nm, cfg.nets[wd.lastNet].ssid, 16);
+      dRow(rows, 3, DC_TEXT, "Last try: %s", nm);
+      resText(wd.lastRes, &t, &h1, &h2);
+      if (wd.lastRes == R_FAIL && wd.lastCode) dRow(rows, 4, DC_RED, "%s (code %u)", t, wd.lastCode);
+      else dRow(rows, 4, DC_RED, "%s", t);
+      dRow(rows, 5, DC_DIM, "%s", h1);
+      dRow(rows, 6, DC_DIM, "%s", h2);
+    } else if (wd.phase != P_DOWN) dRow(rows, 3, DC_DIM, "Please wait...");
+  }
+  char ag[8];
+  if (wd.phase != P_UP || net.cloud == 2 || !cfg.cloudOn || !cfg.cloudHost[0]) {
+    if (wd.scanAt) dRow(rows, 7, DC_DIM, "Heard %u nets, %s ago", wd.scanCount, ago(ag, wd.scanAt));
+    else dRow(rows, 7, DC_DIM, "No scan yet");
+  }
+  if (wd.phase != P_UP) dRow(rows, 8, DC_DIM, (cfg.cloudOn && cfg.cloudHost[0]) ? "Cloud: waits for Wi-Fi" : "Cloud: off");
+  unsigned long up = now / 60000;
+  dRow(rows, 9, DC_DIM, "Wi-Fi module " ESP_VERSION ", up %luh%02lum", up / 60, up % 60);
+}
+
+static void diagPage1(char (*rows)[DIAG_W + 2]) {          // the saved networks
+  dRow(rows, 0, DC_TEXT, "Saved networks: %u of %u", cfg.nNets, MAX_NETS);
+  if (!cfg.nNets) {
+    dRow(rows, 2, DC_AMBER, "None yet. Join the hotspot");
+    dRow(rows, 3, DC_AMBER, "StripCutter-Setup with a");
+    dRow(rows, 4, DC_AMBER, "phone and add them on the");
+    dRow(rows, 5, DC_AMBER, "Wi-Fi tab.");
+  }
+  for (uint8_t i = 0; i < cfg.nNets && i < 8; i++) {
+    char nm[13]; shortName(nm, cfg.nets[i].ssid, 12);
+    char st[16]; char c = DC_TEXT; int r = wd.rssi[i];
+    if (wd.phase == P_UP && wd.joinNet == i) { snprintf(st, sizeof(st), "%d CONNECTED", net.rssi); c = DC_GREEN; }
+    else if (wd.phase == P_JOIN && wd.joinNet == i) { strcpy(st, "joining..."); c = DC_AMBER; }
+    else if (!wd.scanAt) { strcpy(st, "-"); c = DC_DIM; }
+    else if (!wd.inScan[i]) { strcpy(st, "not in range"); c = DC_AMBER; }
+    else switch (wd.res[i]) {
+      case R_PASS:     snprintf(st, sizeof(st), "%d bad pass", r); c = DC_RED; break;
+      case R_NOANSWER: snprintf(st, sizeof(st), "%d no answer", r); c = DC_RED; break;
+      case R_REFUSED:  snprintf(st, sizeof(st), "%d refused", r); c = DC_RED; break;
+      case R_NOIP:     snprintf(st, sizeof(st), "%d no IP", r); c = DC_RED; break;
+      case R_LOST:     snprintf(st, sizeof(st), "%d lost", r); c = DC_AMBER; break;
+      case R_NEEDPASS: snprintf(st, sizeof(st), "%d needs pw", r); c = DC_RED; break;
+      case R_FAIL:     snprintf(st, sizeof(st), "%d failed", r); c = DC_RED; break;
+      case R_OK:       snprintf(st, sizeof(st), "%d dBm ok", r); break;
+      default:         snprintf(st, sizeof(st), "%d dBm", r); break;
+    }
+    dRow(rows, 1 + i, c, "%-12s %s", nm, st);
+  }
+  dRow(rows, 9, DC_DIM, "OK = try them again now");
+}
+
+static void diagPage2(char (*rows)[DIAG_W + 2]) {          // what the module hears
+  if (!wd.scanAt) { dRow(rows, 0, DC_TEXT, "Networks in range"); dRow(rows, 2, DC_DIM, "No scan yet."); }
+  else { char ag[8]; dRow(rows, 0, DC_TEXT, "In range: %u, %s ago", wd.scanCount, ago(ag, wd.scanAt)); }
+  if (wd.scanAt && !wd.nSeen) { dRow(rows, 2, DC_AMBER, "No 2.4 GHz network heard."); }
+  for (uint8_t j = 0; j < wd.nSeen; j++) {
+    char nm[16]; shortName(nm, wd.seen[j].ssid, 15);
+    dRow(rows, 1 + j, wd.seen[j].saved ? DC_GREEN : DC_TEXT, "%-15s %4d %s", nm, wd.seen[j].rssi,
+         wd.seen[j].saved ? "saved" : (wd.seen[j].enc ? "" : "open"));
+  }
+  dRow(rows, 9, DC_DIM, "Only 2.4 GHz. OK = scan");
+}
+
+static void diagSend(uint8_t page, bool full) {
+  char rows[DIAG_ROWS][DIAG_W + 2];
+  for (uint8_t r = 0; r < DIAG_ROWS; r++) { rows[r][0] = DC_TEXT; rows[r][1] = 0; }
+  if (page == 0) diagPage0(rows); else if (page == 1) diagPage1(rows); else diagPage2(rows);
+  if (full || page != diagShown) { for (uint8_t r = 0; r < DIAG_ROWS; r++) diagRow[r][0] = 0; diagShown = page; }
+  for (uint8_t r = 0; r < DIAG_ROWS; r++) {
+    if (!strcmp(rows[r], diagRow[r])) continue;
+    if (qCount >= QN - 2) break;                            // queue full: the rest goes with the next request
+    char pl[DIAG_W + 6], fr[AVR_LINE_MAX + 4];
+    snprintf(pl, sizeof(pl), "Y%c%.27s", '0' + r, rows[r]);
+    frameCmd(fr, sizeof(fr), pl);
+    queueAvr(fr);
+    strcpy(diagRow[r], rows[r]);
+  }
+}
+
+// =====================================================================================
 // lines from the ATmega
 static void avrLine(char *line) {
   uint32_t now = nowMs();
   avrSeenAt = now; avrEver = true;
   if (line[0] == '$') {                      // for this module, from the machine's screen menu
     if (!strcmp(line, "$AP")) hwAction(A_AP, 255);
+    else if (!strncmp(line, "$WD", 3) && line[3] >= '0' && line[3] <= '2') diagSend(line[3] - '0', line[4] == 'F');
+    else if (!strcmp(line, "$WJ")) {           // OK on the details page: try the saved networks again, fresh scan
+      memset(failUntil, 0, sizeof(failUntil));
+      hwAction(A_JOIN, 255); hwAction(A_SCAN, 255);
+    }
     else if (!strcmp(line, "$FORGET")) {
       uint8_t on = cfg.cloudOn, ver = cfg.cloudVerify; char h[65], u[49], pw[65]; uint16_t pt = cfg.cloudPort;
       strcpy(h, cfg.cloudHost); strcpy(u, cfg.cloudUser); strcpy(pw, cfg.cloudPass);
@@ -462,6 +702,7 @@ void coreInit() {
   memset(cacheLine, 0, sizeof(cacheLine)); lastNote[0] = 0;
   nonceCur[0] = 0; newNonce(); newNonce();
   lastIKey[0] = 0;
+  memset(&wd, 0, sizeof(wd)); wd.joinNet = -1; wd.lastNet = -1;
 }
 
 void coreAvrByte(char c) {
