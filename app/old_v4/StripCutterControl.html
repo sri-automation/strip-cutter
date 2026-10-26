@@ -1,0 +1,878 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Strip Cutter Control</title>
+<style>
+  :root {
+    --cabinet: #22303a;      /* control cabinet blue-grey: header, status band */
+    --cabinet-2: #2f414e;
+    --panel: #e8ebe8;        /* powder-coat grey: page */
+    --plate: #f8f9f7;        /* cards */
+    --line: #c5ccc8;
+    --ink: #17222a;
+    --ink-2: #51606a;
+    --net: #c8322b;          /* the red net: stop, the strip */
+    --go: #1d8a4c;
+    --amber: #d9981b;
+    --steel: #7c8790;
+    --display: "Bahnschrift", "DIN Alternate", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+    --body: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+    --mono: "Cascadia Mono", Consolas, "Courier New", monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--panel); color: var(--ink); font: 15px/1.45 var(--body); }
+  button, input, select { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  button:disabled { cursor: not-allowed; }
+  :focus-visible { outline: 3px solid #2b7fd9; outline-offset: 2px; }
+
+  /* ---------- header ---------- */
+  header { background: var(--cabinet); color: #fff; display: flex; align-items: center; gap: 16px; padding: 10px 20px; flex-wrap: wrap; }
+  header h1 { font: 600 22px/1 var(--display); letter-spacing: .01em; margin: 0; margin-right: auto; }
+  .conn { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .conn .portname { color: #c9d4db; font-size: 14px; }
+  .btn { border: 1px solid var(--line); background: #fff; border-radius: 6px; padding: 8px 14px; min-height: 38px; }
+  .btn:hover:not(:disabled) { background: #eef2f0; }
+  .btn:disabled { opacity: .45; }
+  header .btn { border-color: #5c707e; background: var(--cabinet-2); color: #fff; }
+  header .btn:hover:not(:disabled) { background: #3b5161; }
+  header .btn.primary { background: #fff; color: var(--ink); border-color: #fff; font-weight: 600; }
+  header .btn.primary:hover:not(:disabled) { background: #e6ecef; }
+
+  .statusband { background: var(--cabinet-2); color: #fff; padding: 8px 20px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; min-height: 44px; }
+  .lamp { width: 14px; height: 14px; border-radius: 50%; background: #6d7c87; flex: none; box-shadow: inset 0 0 0 2px rgba(0,0,0,.25); }
+  .statusband[data-state="idle"] .lamp { background: #9fd4b3; }
+  .statusband[data-state="run"] .lamp, .statusband[data-state="measure"] .lamp { background: #37d17c; box-shadow: 0 0 0 4px rgba(55,209,124,.25); }
+  .statusband[data-state="test"] .lamp { background: #f2c14e; box-shadow: 0 0 0 4px rgba(242,193,78,.25); }
+  .statusband[data-state="fault"] .lamp { background: #ff5a4f; box-shadow: 0 0 0 4px rgba(255,90,79,.3); }
+  .statusband[data-state="wait"] .lamp { background: #8fb4d9; animation: blink 1.4s ease-in-out infinite; }
+  @keyframes blink { 50% { opacity: .35; } }
+  @media (prefers-reduced-motion: reduce) { .statusband[data-state="wait"] .lamp { animation: none; } }
+  #stateText { font: 600 17px/1.2 var(--display); }
+  #stateDetail { color: #cfd9df; font-size: 14px; }
+  .knife { margin-left: auto; font-size: 14px; color: #cfd9df; display: flex; align-items: center; gap: 8px; }
+  .knife i { width: 22px; height: 10px; border-radius: 2px; background: #6d7c87; display: inline-block; }
+  .knife[data-top="1"] i { background: #9fd4b3; }
+  .knife[data-top="0"] i { background: #f2c14e; }
+
+  .notice { margin: 12px 20px 0; padding: 10px 14px; border-radius: 6px; background: #fff4d6; border: 1px solid #e3c36b; display: none; }
+  .notice.show { display: block; }
+  .notice.bad { background: #fde3e0; border-color: #e19a93; }
+
+  /* ---------- layout ---------- */
+  main { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; padding: 16px 20px 20px; max-width: 1280px; margin: 0 auto; }
+  @media (max-width: 880px) { main { grid-template-columns: 1fr; } }
+  section { background: var(--plate); border: 1px solid var(--line); border-radius: 8px; padding: 16px 18px 18px; }
+  section h2 { font: 600 17px/1.2 var(--display); margin: 0 0 12px; }
+  section h3 { font: 600 14px/1.2 var(--body); margin: 16px 0 8px; color: var(--ink-2); }
+  .col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+
+  /* ---------- run ---------- */
+  .counter { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+  #made { font: 700 96px/0.95 var(--display); font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+  .counter .unit { font: 500 20px/1.2 var(--display); color: var(--ink-2); }
+  #target { font-size: 15px; color: var(--ink-2); }
+  .progress { height: 8px; border-radius: 4px; background: #d9dfdb; overflow: hidden; margin: 10px 0 0; display: none; }
+  .progress.show { display: block; }
+  .progress b { display: block; height: 100%; width: 0; background: var(--go); }
+  .countrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; font-size: 14px; }
+  .countrow input { width: 110px; }
+  .countrow .sep { width: 1px; height: 26px; background: var(--line); margin: 0 4px; }
+
+  /* the net strip: one piece length drawn to scale, the knife at its end */
+  .strip { position: relative; height: 54px; margin: 18px 0 6px; }
+  .strip .net { position: absolute; left: 0; top: 20px; height: 16px; width: 60%; border-radius: 2px;
+    background: repeating-linear-gradient(90deg, var(--net) 0 7px, #a82620 7px 9px); }
+  .strip .blade { position: absolute; top: 0; width: 6px; height: 54px; background: var(--steel); border-radius: 1px; left: 60%; transform: translateY(-14px); transition: transform .12s ease-in; }
+  .strip.cut .blade { transform: translateY(0); }
+  .strip .rule { position: absolute; left: 0; top: 42px; height: 12px; width: 60%; border-left: 1px solid var(--ink-2); border-right: 1px solid var(--ink-2); }
+  .strip .rule::after { content: ""; position: absolute; left: 0; right: 0; top: 6px; border-top: 1px solid var(--ink-2); }
+  .strip .len { position: absolute; top: 38px; left: 0; width: 60%; text-align: center; font-size: 13px; color: var(--ink-2); }
+  .strip .len span { background: var(--plate); padding: 0 6px; position: relative; }
+  @media (prefers-reduced-motion: reduce) { .strip .blade { transition: none; } }
+
+  .runbtns { display: grid; grid-template-columns: 1.3fr 1fr 1fr; gap: 10px; margin-top: 14px; }
+  @media (max-width: 520px) { .runbtns { grid-template-columns: 1fr; } }
+  .big { border: 0; border-radius: 8px; min-height: 64px; padding: 10px 12px; font: 600 18px/1.15 var(--display); color: #fff; }
+  .big small { display: block; font: 400 12.5px/1.2 var(--body); opacity: .9; margin-top: 3px; }
+  .big:disabled { opacity: .35; }
+  .start { background: var(--go); } .start:hover:not(:disabled) { background: #177641; }
+  .stop { background: var(--amber); color: #2b2005; } .stop:hover:not(:disabled) { background: #c58914; }
+  .now { background: var(--net); } .now:hover:not(:disabled) { background: #ad2721; }
+  .why { margin: 8px 0 0; font-size: 13.5px; color: #8a5a00; min-height: 1.45em; }
+  .why.bad { color: #a3241e; }
+
+  .facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px 14px; margin: 14px 0 0; }
+  @media (max-width: 520px) { .facts { grid-template-columns: repeat(2, 1fr); } }
+  .facts div { border-top: 2px solid var(--line); padding-top: 6px; }
+  .facts dt { font-size: 12.5px; color: var(--ink-2); }
+  .facts dd { margin: 0; font: 600 20px/1.2 var(--display); font-variant-numeric: tabular-nums; }
+  .facts dd small { font: 400 12px/1.2 var(--body); color: var(--ink-2); display: block; }
+
+  /* timing bar: one turn of the cutter */
+  .timing { margin-top: 14px; }
+  .timing .bar { position: relative; height: 26px; background: #d3d9d5; border-radius: 4px; overflow: hidden; }
+  .timing .open { position: absolute; top: 0; bottom: 0; background: #b9e0c8; }
+  .timing .feed { position: absolute; top: 5px; bottom: 5px; background: var(--net); border-radius: 2px; }
+  .timing .feed.bad { background: repeating-linear-gradient(135deg, var(--net) 0 6px, #7d1b17 6px 12px); }
+  .timing .top { position: absolute; top: 0; bottom: 0; width: 2px; left: 50%; background: var(--ink); opacity: .55; }
+  .timing .key { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12.5px; color: var(--ink-2); margin-top: 6px; }
+  .timing .key i { display: inline-block; width: 12px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+  #timingNote, #parkNote { font-size: 13px; color: var(--ink-2); margin-top: 4px; }
+
+  /* ---------- settings ---------- */
+  .field { display: grid; grid-template-columns: minmax(0, 1fr) 190px; align-items: center; gap: 4px 12px; padding: 7px 0; border-bottom: 1px solid #dfe4e1; }
+  .field:last-of-type { border-bottom: 0; }
+  .field label { font-weight: 600; }
+  .field .hint { grid-column: 1; font-size: 12.5px; color: var(--ink-2); margin-top: -2px; }
+  .field .ctl { grid-column: 2; grid-row: 1 / span 2; display: flex; align-items: center; gap: 6px; justify-content: flex-end; }
+  input[type=number], input[type=text] { border: 1px solid #aab4ae; border-radius: 6px; background: #fff; padding: 7px 8px; min-height: 38px; width: 96px; text-align: right; font-variant-numeric: tabular-nums; }
+  input.edited { border-color: var(--amber); background: #fff8e5; }
+  input:disabled { background: #e9ecea; color: #7b8780; }
+  .suffix { width: 40px; color: var(--ink-2); font-size: 13.5px; }
+  .step { width: 38px; min-height: 38px; padding: 0; font-weight: 700; }
+  .rowbtns { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
+  .btn.apply { background: var(--cabinet); color: #fff; border-color: var(--cabinet); font-weight: 600; }
+  .btn.apply:hover:not(:disabled) { background: #31454f; }
+  .btn.apply.pending { background: var(--amber); border-color: var(--amber); color: #2b2005; }
+  .checks { margin-top: 12px; display: grid; gap: 6px; font-size: 14px; }
+  .checks label { display: flex; gap: 8px; align-items: flex-start; }
+  .checks input { margin-top: 3px; }
+  #applyNote { font-size: 13px; color: var(--ink-2); }
+  details.adv { margin-top: 8px; border-top: 1px solid #dfe4e1; padding-top: 6px; }
+  details.adv summary { cursor: pointer; font-size: 14px; color: var(--ink-2); padding: 4px 0; }
+  .grp { font: 600 13px/1.2 var(--body); color: var(--ink-2); text-transform: uppercase; letter-spacing: .04em; margin: 14px 0 2px; }
+
+  /* ---------- calibration ---------- */
+  .cal { display: grid; grid-template-columns: auto 1fr 1fr; gap: 6px 10px; align-items: center; margin-top: 8px; font-size: 14px; }
+  .cal .h { font-size: 12.5px; color: var(--ink-2); }
+  .cal input { width: 100%; max-width: 120px; }
+  #calOut { font-size: 13.5px; margin-top: 10px; }
+
+  /* ---------- tests ---------- */
+  .tests { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  @media (max-width: 520px) { .tests { grid-template-columns: 1fr; } }
+  .tests .btn { text-align: left; }
+  .inline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .inline input { width: 78px; }
+
+  /* ---------- log ---------- */
+  .logwrap { grid-column: 1 / -1; }
+  #log { height: 190px; overflow: auto; background: #101a20; color: #d7e0e5; font: 13px/1.45 var(--mono); padding: 10px 12px; border-radius: 6px; white-space: pre-wrap; word-break: break-word; }
+  #log .tx { color: #8fc7ff; } #log .st { color: #7f8f99; } #log .err { color: #ff9a92; } #log .app { color: #f2c14e; }
+  .logbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+  .logbar h2 { margin: 0; margin-right: auto; }
+  .cmd { display: flex; gap: 8px; margin-top: 10px; }
+  .cmd input { flex: 1; text-align: left; width: auto; font-family: var(--mono); }
+  .small { font-size: 13px; color: var(--ink-2); }
+  a { color: #1c5fa8; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Strip cutter control</h1>
+  <div class="conn">
+    <span class="portname" id="portName">Not connected</span>
+    <button class="btn primary" id="btnConnect">Connect to Arduino</button>
+    <button class="btn" id="btnDisconnect" hidden>Disconnect</button>
+  </div>
+</header>
+
+<div class="statusband" id="statusband" data-state="off">
+  <span class="lamp"></span>
+  <span id="stateText">Not connected</span>
+  <span id="stateDetail">Press Connect and pick the Arduino's COM port.</span>
+  <span class="knife" id="knife" data-top=""><i></i><span id="knifeText">Knife position unknown</span></span>
+</div>
+
+<div class="notice" id="notice"></div>
+
+<main>
+  <div class="col">
+    <section aria-labelledby="hRun">
+      <h2 id="hRun">Cutting</h2>
+      <div class="counter">
+        <span id="made">0</span>
+        <span><span class="unit">pieces made</span><br><span id="target">no stop count set</span></span>
+      </div>
+      <div class="progress" id="progress"><b></b></div>
+      <div class="countrow">
+        <label for="setCount">Set the count to</label>
+        <input type="number" id="setCount" min="0" max="99999999" step="1" aria-label="New piece count">
+        <button class="btn idle" id="btnSetCount" disabled>Set</button>
+        <span class="sep" aria-hidden="true"></span>
+        <button class="btn idle" id="btnResetCount" disabled>Reset count to 0</button>
+      </div>
+
+      <div class="strip" id="strip" aria-hidden="true">
+        <div class="net" id="stripNet"></div>
+        <div class="blade" id="stripBlade"></div>
+        <div class="rule" id="stripRule"></div>
+        <div class="len" id="stripLen"><span id="stripLenText">70 mm</span></div>
+      </div>
+
+      <div class="runbtns">
+        <button class="big start" id="btnStart" disabled>Start cutting<small>cutter and feeder together</small></button>
+        <button class="big stop" id="btnStop" disabled>Stop after this piece<small>knife parks at the top</small></button>
+        <button class="big now" id="btnNow" disabled>Stop now<small>cutter off at once (Esc)</small></button>
+      </div>
+      <p class="why" id="startWhy" aria-live="polite"></p>
+
+      <dl class="facts">
+        <div><dt>Pieces per minute</dt><dd id="fRate">–</dd></div>
+        <div><dt>One cutter turn</dt><dd id="fTurn">–</dd></div>
+        <div><dt>One feed takes</dt><dd id="fFeed">–</dd></div>
+        <div><dt>Knife safely open</dt><dd id="fOpen">–</dd></div>
+      </dl>
+
+      <div class="timing" id="timing">
+        <h3>Feed timing in one turn of the cutter</h3>
+        <div class="bar"><div class="open" id="tOpen"></div><div class="feed" id="tFeed"></div><div class="top"></div></div>
+        <div class="key"><span><i style="background:#b9e0c8"></i>knife safely open</span><span><i style="background:var(--net)"></i>net is moving</span><span><i style="background:var(--ink);opacity:.55;width:2px"></i>knife at the top</span></div>
+        <div id="timingNote">Shown after the cutter has been measured (the first three turns of a run).</div>
+        <div id="parkNote"></div>
+      </div>
+    </section>
+
+    <section aria-labelledby="hTests">
+      <h2 id="hTests">Tests</h2>
+      <h3>Feeder only (cutter stays off)</h3>
+      <div class="tests">
+        <button class="btn idle" id="btnF1" disabled>Feed one piece</button>
+        <div class="inline"><button class="btn idle" id="btnFn" disabled>Feed</button><input type="number" id="nFeed" value="5" min="1" max="60000" aria-label="Number of pieces to feed"><span class="small">pieces</span></div>
+        <button class="btn idle" id="btnC" disabled>Feed continuously until stopped</button>
+        <button class="btn idle" id="btnR" disabled>Turn the roller one full turn</button>
+      </div>
+      <div class="inline" style="margin-top:10px">
+        <span>Jog the net</span><input type="number" id="jogMm" value="20" min="1" max="500" aria-label="Jog distance in mm"><span class="small">mm</span>
+        <button class="btn idle" id="btnJb" disabled>Back</button><button class="btn idle" id="btnJf" disabled>Forward</button>
+        <span class="small" id="testCount"></span>
+      </div>
+      <h3>Cutter only</h3>
+      <div class="tests">
+        <button class="btn idle" id="btnK" disabled>Make one cut and park at the top</button>
+        <button class="btn idle" id="btnH" disabled>Park the knife at the top</button>
+        <button class="btn idle" id="btnW" disabled>Watch the limit switch for 10 s</button>
+      </div>
+    </section>
+  </div>
+
+  <div class="col">
+    <section aria-labelledby="hSet">
+      <h2 id="hSet">Settings</h2>
+
+      <div class="field"><label for="sL">Piece length</label><div class="hint">5 to 2000 mm, the length you want to get</div>
+        <div class="ctl"><input type="number" id="sL" min="5" max="2000" step="0.5" data-cmd="L" data-dp="1"><span class="suffix">mm</span></div></div>
+      <div class="field"><label for="sQ">Stop at count</label><div class="hint">stops when the count reaches this; 0 = keep going</div>
+        <div class="ctl"><input type="number" id="sQ" min="0" max="99999999" step="1" data-cmd="Q" data-dp="0" style="width:110px"><span class="suffix"></span></div></div>
+      <div class="field"><label for="sS">Top feed speed</label><div class="hint">30 to 2000 mm/s; short pieces may not reach it</div>
+        <div class="ctl"><input type="number" id="sS" min="30" max="2000" step="50" data-cmd="S" data-dp="0"><span class="suffix">mm/s</span></div></div>
+      <div class="field"><label for="sA">Feed acceleration</label><div class="hint">500 to 30000 mm/s²; higher = shorter feed time</div>
+        <div class="ctl"><input type="number" id="sA" min="500" max="30000" step="500" data-cmd="A" data-dp="0"><span class="suffix">mm/s²</span></div></div>
+      <div class="field"><label for="sO">Feed timing offset</label><div class="hint">later (+) or earlier (−); the two buttons also work while cutting</div>
+        <div class="ctl"><button class="btn step" id="btnOm" disabled aria-label="Feed 10 ms earlier">−</button><input type="number" id="sO" min="-500" max="500" step="10" data-cmd="O" data-dp="0" style="width:70px"><button class="btn step" id="btnOp" disabled aria-label="Feed 10 ms later">+</button><span class="suffix" style="width:22px">ms</span></div></div>
+      <div class="field"><label for="sT">Feeder test rhythm</label><div class="hint">time from one test feed to the next</div>
+        <div class="ctl"><input type="number" id="sT" min="200" max="60000" step="100" data-cmd="T" data-dp="0"><span class="suffix">ms</span></div></div>
+
+      <div class="grp">Length correction</div>
+      <div class="field"><label for="sU">Factor</label><div class="hint" id="feedsHint">net fed per piece = factor × length + offset</div>
+        <div class="ctl"><input type="number" id="sU" min="0.5" max="1.5" step="0.001" data-cmd="U" data-dp="4"><span class="suffix"></span></div></div>
+      <div class="field"><label for="sV">Offset</label><div class="hint">use the calculator below to set these two</div>
+        <div class="ctl"><input type="number" id="sV" min="-50" max="50" step="0.1" data-cmd="V" data-dp="2"><span class="suffix">mm</span></div></div>
+
+      <details class="adv">
+        <summary>Parking at the top (learnt by the Arduino)</summary>
+        <div class="field"><label for="sD">Switch off before the top</label><div class="hint">the Arduino adjusts this after every stop</div>
+          <div class="ctl"><input type="number" id="sD" min="-100" max="400" step="5" data-cmd="D" data-dp="0"><span class="suffix">ms</span></div></div>
+        <div class="field"><label for="sE">One nudge</label><div class="hint">short push when the knife stops just below the top</div>
+          <div class="ctl"><input type="number" id="sE" min="5" max="100" step="1" data-cmd="E" data-dp="0"><span class="suffix">ms</span></div></div>
+      </details>
+
+      <div class="rowbtns">
+        <button class="btn apply idle" id="btnApply" disabled>Send settings to the Arduino</button>
+        <button class="btn idle" id="btnRead" disabled>Undo changes</button>
+        <span id="applyNote"></span>
+      </div>
+      <div class="checks">
+        <label><input type="checkbox" id="optAuto" checked><span>Connect by itself when the Arduino is plugged in or the app opens</span></label>
+        <label><input type="checkbox" id="optHold" checked><span>When connecting, hold the automatic start so the machine waits for me</span></label>
+      </div>
+      <p class="small" style="margin:10px 0 0">The Arduino keeps these settings and the piece count in its memory, so they come back after a power cut.</p>
+    </section>
+
+    <section aria-labelledby="hCal">
+      <h2 id="hCal">Correct the piece length</h2>
+      <p class="small" style="margin:0">Cut some pieces with the settings the Arduino has now, measure them, and enter what you set and what you got. One length corrects the factor; two different lengths (for example 60 and 70 mm) correct the factor and the offset.</p>
+      <div class="cal">
+        <span></span><span class="h">Length set</span><span class="h">Length measured</span>
+        <span>1</span><input type="number" id="c1s" min="5" max="2000" step="0.5" aria-label="First length set, mm"><input type="number" id="c1m" min="1" max="3000" step="0.1" aria-label="First length measured, mm">
+        <span>2</span><input type="number" id="c2s" min="5" max="2000" step="0.5" aria-label="Second length set, mm (optional)"><input type="number" id="c2m" min="1" max="3000" step="0.1" aria-label="Second length measured, mm (optional)">
+      </div>
+      <div class="rowbtns"><button class="btn" id="btnCalc">Work out the correction</button></div>
+      <div id="calOut" aria-live="polite"></div>
+    </section>
+
+    <section aria-labelledby="hHelp">
+      <h2 id="hHelp">Before you connect</h2>
+      <ol class="small" style="margin:0;padding-left:20px;font-size:14px;color:var(--ink)">
+        <li>Close the Serial Monitor in the Arduino IDE. Only one program can use the COM port.</li>
+        <li>The first time, press <b>Connect to Arduino</b> and pick the port. After that the app connects by itself.</li>
+        <li>To upload a sketch from the Arduino IDE, press <b>Disconnect</b> here first (or close the app).</li>
+      </ol>
+    </section>
+  </div>
+
+  <section class="logwrap" aria-labelledby="hLog">
+    <div class="logbar">
+      <h2 id="hLog">Messages from the Arduino</h2>
+      <label class="small"><input type="checkbox" id="optRaw"> show status lines (#)</label>
+      <button class="btn" id="btnSave">Save to a file</button>
+      <button class="btn" id="btnClear">Clear</button>
+    </div>
+    <div id="log" role="log" aria-live="off"></div>
+    <div class="cmd"><input type="text" id="cmd" placeholder="Type a command, for example L75 or ?" aria-label="Command to send" disabled><button class="btn" id="btnSend" disabled>Send</button></div>
+  </section>
+</main>
+
+<script>
+(() => {
+  'use strict';
+  const $ = id => document.getElementById(id);
+  const enc = new TextEncoder();
+  const DEMO = /[?&]demo\b/.test(location.search);
+  const FIELDS = ['sL', 'sQ', 'sS', 'sA', 'sO', 'sT', 'sU', 'sV', 'sD', 'sE'];   // input ids, each has data-cmd
+
+  // ---------------------------------------------------------------- state
+  const S = {
+    port: null, reader: null, writer: null, connected: false, opening: false, manualOff: false,
+    fw: 0,                 // firmware version from "#B", 0 = older sketch
+    state: 'off',          // off | wait | boot | idle | measure | run | test | cut | park | jog | watch | fault
+    made: 0, testMade: 0, cfg: null, m: null, pieceTimes: [], lastLineAt: 0, bootTimer: null, heldAuto: false,
+    logLines: [], busyNoticeShown: false
+  };
+  const LABEL = {
+    off: ['Not connected', 'Press Connect and pick the Arduino\'s COM port.'],
+    wait: ['Waiting for the Arduino', 'Plug it in or switch it on; the app connects by itself. If nothing happens, press Connect.'],
+    boot: ['Connecting', 'Waiting for the Arduino to restart.'],
+    idle: ['Ready', 'Nothing is running.'],
+    measure: ['Measuring the cutter', 'Three turns without feeding, then cutting starts.'],
+    run: ['Cutting', 'Cutter and feeder are running.'],
+    test: ['Feeder test', 'Cutter is off. Only the net is moving.'],
+    cut: ['One cut', 'The knife makes one stroke and parks at the top.'],
+    park: ['Parking the knife', 'Bringing the knife to the top.'],
+    jog: ['Moving the net', ''],
+    watch: ['Watching the limit switch', 'Press and release the switch by hand. Ends after 10 s.'],
+    fault: ['Stopped by a fault', 'Read the message below, fix it, then start again.']
+  };
+  const BAND = { off: 'off', wait: 'wait', boot: 'off', idle: 'idle', measure: 'measure', run: 'run', test: 'test', cut: 'test', park: 'test', jog: 'test', watch: 'test', fault: 'fault' };
+  const busy = () => !['idle', 'fault'].includes(S.state);
+
+  // ---------------------------------------------------------------- log
+  function log(text, cls) {
+    S.logLines.push((cls === 'tx' ? '> ' : '') + text);
+    if (S.logLines.length > 5000) S.logLines.splice(0, 1000);
+    if (cls === 'st' && !$('optRaw').checked) return;
+    const el = $('log'), atEnd = el.scrollTop + el.clientHeight >= el.scrollHeight - 30;
+    const d = document.createElement('div');
+    if (cls) d.className = cls;
+    d.textContent = (cls === 'tx' ? '> ' : '') + text;
+    el.appendChild(d);
+    while (el.childNodes.length > 800) el.removeChild(el.firstChild);
+    if (atEnd) el.scrollTop = el.scrollHeight;
+  }
+  function notice(text, bad) {
+    const n = $('notice');
+    n.textContent = text || ''; n.classList.toggle('show', !!text); n.classList.toggle('bad', !!bad);
+  }
+
+  // ---------------------------------------------------------------- settings in the boxes vs. the Arduino
+  const dp = e => +e.dataset.dp;
+  const fmt = (e, v) => (v === undefined || v === null || Number.isNaN(+v)) ? '' : String(+(+v).toFixed(dp(e)));
+  function cfgValue(e) { return S.cfg ? S.cfg[e.dataset.cmd] : undefined; }
+  function isEdited(e) {
+    const c = cfgValue(e);
+    if (c === undefined) return false;
+    const v = parseFloat(e.value);
+    if (Number.isNaN(v)) return e.value.trim() !== '';
+    return Math.abs(v - c) > Math.pow(10, -dp(e)) / 2;
+  }
+  function markEdited() {
+    let n = 0;
+    for (const id of FIELDS) { const e = $(id), ed = isEdited(e); e.classList.toggle('edited', ed); if (ed) n++; }
+    return n;
+  }
+  const pendingCount = () => FIELDS.filter(id => $(id).classList.contains('edited')).length;
+
+  // ---------------------------------------------------------------- rendering
+  function setState(st, detail) {
+    S.state = st;
+    const [t, d] = LABEL[st];
+    $('stateText').textContent = t;
+    $('stateDetail').textContent = detail || d;
+    $('statusband').dataset.state = BAND[st];
+    if (['measure', 'run', 'cut', 'park'].includes(st)) knife('moving');
+    render();
+  }
+  function startBlock() {
+    if (!S.connected) return '';
+    if (S.state === 'boot') return '';
+    if (busy()) return '';
+    const n = pendingCount();
+    if (n) return { bad: false, text: n === 1 ? 'One setting is changed here but not sent. Send it (or undo) before starting.' : n + ' settings are changed here but not sent. Send them (or undo) before starting.' };
+    if (S.fw >= 4 && S.cfg && S.cfg.Q > 0 && S.made >= S.cfg.Q) return { bad: true, text: 'The count has reached the stop count (' + S.cfg.Q + '). Reset the count or raise the stop count.' };
+    return '';
+  }
+  function render() {
+    const c = S.connected, idle = c && !busy(), b = c && busy() && S.state !== 'boot';
+    document.querySelectorAll('.idle').forEach(e => e.disabled = !idle);
+    const blk = startBlock();
+    $('btnStart').disabled = !idle || !!blk;
+    $('startWhy').textContent = blk ? blk.text : '';
+    $('startWhy').classList.toggle('bad', !!(blk && blk.bad));
+    $('btnStop').disabled = !(b && ['run', 'measure', 'test'].includes(S.state));
+    $('btnNow').disabled = !c || S.state === 'boot';
+    $('btnOm').disabled = $('btnOp').disabled = !(idle || S.state === 'run' || S.state === 'measure');
+    for (const id of FIELDS.concat(['setCount', 'nFeed', 'jogMm'])) $(id).disabled = c && !idle;
+    const pend = pendingCount();
+    $('btnApply').classList.toggle('pending', pend > 0);
+    $('btnApply').textContent = pend ? 'Send ' + pend + ' change' + (pend > 1 ? 's' : '') + ' to the Arduino' : 'Send settings to the Arduino';
+    $('btnRead').disabled = !idle || !pend;
+    $('btnSetCount').disabled = !idle || S.fw < 4;
+    $('btnResetCount').disabled = !idle || S.fw < 4;
+    $('btnH').disabled = !idle || S.fw < 4;
+    $('cmd').disabled = $('btnSend').disabled = !c;
+    $('btnConnect').hidden = c; $('btnDisconnect').hidden = !c;
+    $('made').textContent = S.made.toLocaleString('en-IN');
+    const q = S.cfg ? S.cfg.Q : 0;
+    $('target').textContent = q > 0 ? 'stops at ' + q.toLocaleString('en-IN') : 'no stop count set';
+    $('progress').classList.toggle('show', q > 0);
+    $('progress').firstElementChild.style.width = q > 0 ? Math.min(100, 100 * S.made / q) + '%' : '0';
+    $('testCount').textContent = S.state === 'test' || S.testMade ? 'test feeds: ' + S.testMade : '';
+    // net strip drawn to scale: 100 mm = 60 % of the width, capped
+    const L = S.cfg ? S.cfg.L : 70, w = Math.max(8, Math.min(92, L * 0.6));
+    for (const id of ['stripNet', 'stripRule', 'stripLen']) $(id).style.width = w + '%';
+    $('stripBlade').style.left = w + '%';
+    $('stripLenText').textContent = (Math.round(L * 10) / 10) + ' mm';
+    if (S.cfg && S.cfg.U !== undefined) $('feedsHint').textContent = 'net fed per piece = factor × length + offset; now ' + (S.cfg.U * S.cfg.L + S.cfg.V).toFixed(1) + ' mm for ' + S.cfg.L + ' mm';
+    renderTiming();
+  }
+  function renderTiming() {
+    const m = S.m, o = S.cfg ? S.cfg.O : 0;
+    $('fTurn').textContent = m ? m.turn + ' ms' : '–';
+    $('fFeed').innerHTML = m ? m.feed + ' ms' + (m.actual ? '<small>measured ' + m.actual + ' ms</small>' : '') : '–';
+    $('fOpen').textContent = m ? m.open + ' ms' : '–';
+    const now = performance.now(), t = S.pieceTimes.filter(x => now - x < 30000);
+    $('fRate').textContent = (S.state === 'run' || S.state === 'test') && t.length >= 2 ? (60000 * (t.length - 1) / (t[t.length - 1] - t[0])).toFixed(1) : '–';
+    if (!m) { $('tOpen').style.width = '0'; $('tFeed').style.width = '0'; return; }
+    const pc = x => (100 * x / m.turn);
+    $('tOpen').style.left = (50 - pc(m.open) / 2) + '%'; $('tOpen').style.width = pc(m.open) + '%';
+    const fl = 50 - pc(m.feed) / 2 + pc(o), fr = fl + pc(m.feed);
+    $('tFeed').style.left = fl + '%'; $('tFeed').style.width = pc(m.feed) + '%';
+    const lo = 50 - pc(m.open) / 2, hi = 50 + pc(m.open) / 2, bad = fl < lo - 0.01 || fr > hi + 0.01;
+    $('tFeed').classList.toggle('bad', bad);
+    const early = Math.round((lo - fl) * m.turn / 100), late = Math.round((fr - hi) * m.turn / 100);
+    $('timingNote').textContent = bad
+      ? (late > 0 ? 'The feed ends ' + late + ' ms after the knife starts to close. Make the offset smaller, or raise the acceleration.'
+                  : 'The feed starts ' + early + ' ms before the knife is safely open. Make the offset larger, or raise the acceleration.')
+      : 'The feed fits inside the open time with ' + Math.round((hi - fr) * m.turn / 100) + ' ms to spare after it and ' + Math.round((fl - lo) * m.turn / 100) + ' ms before it.';
+  }
+  function fillInputs(force) {
+    if (!S.cfg) return;
+    for (const id of FIELDS) {
+      const e = $(id), v = cfgValue(e);
+      if (v === undefined) continue;
+      if (force || !e.classList.contains('edited')) e.value = fmt(e, v);
+    }
+    markEdited();
+  }
+  function knife(top) {
+    if (top === 'moving') { $('knife').dataset.top = ''; $('knifeText').textContent = 'Knife is moving'; return; }
+    $('knife').dataset.top = top === null ? '' : (top ? '1' : '0');
+    $('knifeText').textContent = top === null ? 'Knife position unknown' : (top ? 'Knife at the top' : 'Knife not at the top');
+  }
+  function cutBlink() {
+    const s = $('strip'); s.classList.add('cut'); setTimeout(() => s.classList.remove('cut'), 260);
+  }
+
+  // ---------------------------------------------------------------- protocol
+  function onLine(line) {
+    S.lastLineAt = performance.now();
+    if (line[0] === '#') { log(line, 'st'); return onStatus(line); }
+    log(line, /^STOPPED|^NOT STARTED|^NOTE:/.test(line) ? 'err' : '');
+    if (/^STOPPED: /.test(line)) notice(line.replace(/^STOPPED: /, 'The machine stopped: '), true);
+    if (/^NOT STARTED/.test(line)) notice(line.replace(/^NOT STARTED: /, 'Not started: '), true);
+    if (/send any key to cancel/.test(line) && !S.fw) holdAuto();
+    if (S.fw) return;
+    // older sketch without status lines: follow the plain text
+    let m;
+    if ((m = line.match(/^length ([\d.]+) mm, pieces (\d+), speed (\d+) mm\/s .*offset (-?\d+) ms, made (\d+), limit switch (PRESSED|released)/))) {
+      S.cfg = { L: +m[1], Q: +m[2], S: +m[3], O: +m[4], T: S.cfg ? S.cfg.T : 2000 }; S.made = +m[5]; knife(m[6] === 'PRESSED'); fillInputs();
+      if (S.state === 'boot') setState('idle'); else render();
+    } else if (/^GO continuous/.test(line)) { S.pieceTimes = []; setState('measure'); }
+    else if ((m = line.match(/^one turn (\d+) ms, switch pressed (\d+) ms, feed takes (\d+) ms, knife safely open (\d+) ms/))) { S.m = { turn: +m[1], pressed: +m[2], feed: +m[3], open: +m[4] }; setState('run'); }
+    else if (/^FEEDER TEST/.test(line)) setState('test');
+    else if ((m = line.match(/^DONE, pieces made: (\d+)/))) { S.made = +m[1]; setState('idle'); }
+    else if (/^cut done|^watch finished|^done\. Measure|^automatic start cancelled|^feeder test done/.test(line)) setState('idle');
+    else if (/^STOPPED/.test(line)) setState('fault');
+    else if ((m = line.match(/^offset (-?\d+)/)) && S.cfg) { S.cfg.O = +m[1]; fillInputs(); render(); }
+  }
+  function onStatus(line) {
+    const p = line.slice(1).trim().split(/\s+/), k = p[0];
+    if (k === 'B') { S.fw = +p[1] || 1; if (S.fw >= 4) notice(''); }
+    else if (k === 'S') {
+      const map = { IDLE: 'idle', MEASURE: 'measure', RUN: 'run', FEEDTEST: 'test', CUT: 'cut', PARK: 'park', JOG: 'jog', WATCH: 'watch', FAULT: 'fault' };
+      const st = map[p[1]] || 'idle';
+      if (st === 'idle' && S.state === 'fault') return render();     // keep showing the fault until something new starts
+      if (st === 'measure') { S.pieceTimes = []; notice(''); }
+      if (st === 'test') { S.pieceTimes = []; S.testMade = 0; notice(''); }
+      setState(st);
+    }
+    else if (k === 'P') { const n = +p[1]; if (n === S.made + 1 && S.state === 'run') { S.pieceTimes.push(performance.now()); if (S.pieceTimes.length > 40) S.pieceTimes.shift(); cutBlink(); } S.made = n; render(); }
+    else if (k === 'F') { const n = +p[1]; if (n > S.testMade) { S.pieceTimes.push(performance.now()); if (S.pieceTimes.length > 40) S.pieceTimes.shift(); } S.testMade = n; render(); }
+    else if (k === 'C') {
+      const c = { L: +p[1], Q: +p[2], S: +p[3], O: +p[4], T: +p[5] };
+      if (p.length >= 15) Object.assign(c, { A: +p[9], U: +p[10], V: +p[11], D: +p[12], E: +p[13], turn: +p[14] });
+      S.cfg = c; S.made = +p[6]; knife(p[7] === '1'); fillInputs(); render();
+    }
+    else if (k === 'O') { if (S.cfg) { S.cfg.O = +p[1]; $('sO').value = S.cfg.O; fillInputs(); render(); } }
+    else if (k === 'M') { S.m = { turn: +p[1], pressed: +p[2], feed: +p[3], open: +p[4], actual: p[5] !== undefined ? +p[5] : (S.m && S.m.turn === +p[1] ? S.m.actual : undefined) }; render(); }
+    else if (k === 'T') knife(p[1] === '1');
+    else if (k === 'A') holdAuto();
+    else if (k === 'K') {
+      const r = +p[1], n = +p[2], lead = +p[3];
+      if (S.cfg) { S.cfg.D = lead; fillInputs(); }
+      $('parkNote').textContent = 'Last stop: ' + (r === 0 ? 'coasted onto the top' : r === 1 ? 'reached the top with ' + n + ' nudge' + (n === 1 ? '' : 's') : r === 2 ? 'went past the top' : 'stopped') + '. The Arduino now switches the cutter off ' + lead + ' ms before the top.';
+      render();
+    }
+  }
+  function holdAuto() {
+    if (S.heldAuto) return;
+    S.heldAuto = true;
+    if ($('optHold').checked) { log('Holding the automatic start.', 'app'); send('?\n', true); }
+    else log('The Arduino will start cutting by itself in 3 seconds.', 'app');
+  }
+
+  // ---------------------------------------------------------------- sending
+  let chain = Promise.resolve();
+  function send(text, quiet) {
+    if (!S.connected || !S.writer) return Promise.resolve();
+    if (!quiet || text.trim()) log(text.trim() || text, 'tx');
+    chain = chain.then(() => S.writer.write(enc.encode(text))).catch(e => log('Could not send: ' + e.message, 'err'));
+    return chain;
+  }
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const cmd = c => send(c + '\n');
+  function readInputs(onlyEdited) {
+    const out = [], bad = [];
+    for (const id of FIELDS) {
+      const e = $(id);
+      if (onlyEdited && !e.classList.contains('edited')) continue;
+      if (e.closest('details') && !e.closest('details').open && !e.classList.contains('edited')) continue;
+      const val = parseFloat(e.value), min = +e.min, max = +e.max;
+      if (Number.isNaN(val) || val < min || val > max) { bad.push(e.closest('.field').querySelector('label').textContent + ' must be ' + min + ' to ' + max); continue; }
+      out.push([e.dataset.cmd, +val.toFixed(dp(e))]);
+    }
+    return { out, bad };
+  }
+
+  // ---------------------------------------------------------------- connection
+  function portLabel(port) {
+    const info = port && port.getInfo ? port.getInfo() : {};
+    return info.usbVendorId ? 'USB ' + info.usbVendorId.toString(16).padStart(4, '0') + ':' + (info.usbProductId || 0).toString(16).padStart(4, '0') : '';
+  }
+  function rememberPort(port) {
+    try { const i = port.getInfo ? port.getInfo() : {}; localStorage.setItem('stripcutter.port', JSON.stringify({ v: i.usbVendorId || 0, p: i.usbProductId || 0 })); } catch (e) {}
+  }
+  function pickPort(ports) {
+    let want = null; try { want = JSON.parse(localStorage.getItem('stripcutter.port') || 'null'); } catch (e) {}
+    if (want) { const m = ports.find(pt => { const i = pt.getInfo ? pt.getInfo() : {}; return (i.usbVendorId || 0) === want.v && (i.usbProductId || 0) === want.p; }); if (m) return m; }
+    return ports[0];
+  }
+  async function connect() {              // the button: choose a port
+    notice('');
+    S.manualOff = false;
+    try {
+      let port;
+      if (DEMO) port = new FakeArduinoPort();
+      else {
+        if (!('serial' in navigator)) { notice('This browser cannot use COM ports. Open this file with Microsoft Edge or Google Chrome on the PC.', true); return; }
+        port = await navigator.serial.requestPort();
+      }
+      await openPort(port, false);
+    } catch (e) {
+      if (e && e.name === 'NotFoundError') return;                  // the port list was closed without a choice
+      notice('Could not open the port. Close the Arduino IDE Serial Monitor (or any other program using the port) and try again. (' + e.message + ')', true);
+    }
+  }
+  async function openPort(port, auto) {
+    if (S.connected || S.opening) return false;
+    S.opening = true;
+    try {
+      await port.open({ baudRate: 115200 });
+    } catch (e) {
+      S.opening = false;
+      if (auto) {
+        if (!S.busyNoticeShown) { S.busyNoticeShown = true; notice('The Arduino is plugged in, but its COM port is in use by another program (the Arduino IDE Serial Monitor or an upload?). The app keeps trying and connects when the port is free.', true); }
+        return false;
+      }
+      throw e;
+    }
+    S.opening = false; S.busyNoticeShown = false;
+    S.port = port; S.connected = true; S.fw = 0; S.heldAuto = false; S.m = null; S.pieceTimes = []; S.lastLineAt = 0; S.testMade = 0;
+    if (auto) notice('');
+    knife(null);
+    S.writer = port.writable.getWriter();
+    rememberPort(port);
+    $('portName').textContent = DEMO ? 'Demo Arduino (no hardware)' : 'Connected' + (portLabel(port) ? ' (' + portLabel(port) + ')' : '');
+    log((auto ? 'Arduino found, port opened' : 'Port opened') + ' at 115200 baud. Waiting for the Arduino.', 'app');
+    setState('boot');
+    readLoop(port);
+    // no text at all after a while: the board did not restart, so ask it
+    clearTimeout(S.bootTimer);
+    S.bootTimer = setTimeout(() => {
+      if (!S.connected) return;
+      if (!S.lastLineAt) { send('?\n'); setTimeout(() => { if (S.connected && !S.lastLineAt) notice('Nothing came back from this port. Check that it is the Arduino\'s port and that the strip cutter sketch is loaded.', true); }, 1500); }
+    }, 3500);
+    setTimeout(() => {
+      if (!S.connected) return;
+      if (S.state === 'boot' && S.lastLineAt) setState('idle');
+      if (S.lastLineAt && S.fw < 4) notice('This Arduino has an older sketch. Upload FeedCutPanel_v4.ino to keep the settings and the count after a power cut, park exactly at the top and feed faster.');
+    }, 6000);
+    return true;
+  }
+  async function readLoop(port) {
+    const dec = new TextDecoder(); let buf = '';
+    try {
+      S.reader = port.readable.getReader();
+      for (;;) {
+        const { value, done } = await S.reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf('\n')) >= 0) { const line = buf.slice(0, i).replace(/\r$/, ''); buf = buf.slice(i + 1); if (line.trim()) onLine(line); }
+      }
+    } catch (e) {
+      if (S.connected) { log('Connection lost: ' + e.message, 'err'); }
+    } finally {
+      try { S.reader && S.reader.releaseLock(); } catch (e) {}
+      if (S.connected) cleanup(true);
+    }
+  }
+  async function cleanup(lost) {
+    const was = S.connected;
+    S.connected = false; clearTimeout(S.bootTimer);
+    try { if (S.reader) await S.reader.cancel(); } catch (e) {}
+    try { if (S.writer) S.writer.releaseLock(); } catch (e) {}
+    try { if (S.port) await S.port.close(); } catch (e) {}
+    S.port = S.reader = S.writer = null;
+    $('portName').textContent = 'Not connected';
+    knife(null);
+    const waiting = autoOn();
+    setState(waiting ? 'wait' : 'off');
+    if (was) log(lost ? 'Connection to the Arduino lost.' : 'Disconnected.', 'app');
+    if (lost && waiting) notice('The Arduino was unplugged or lost power. The app connects again by itself when it is back.');
+  }
+  async function disconnect() {
+    if (S.connected && busy() && S.state !== 'boot') {
+      if (!confirm('The machine is still running. Disconnecting does not stop it.\n\nDisconnect anyway?')) return;
+    }
+    S.manualOff = true;                     // do not connect again by itself until Connect is pressed or the cable is plugged in again
+    await cleanup(false);
+    setState('off', 'Press Connect to use the Arduino again.');
+  }
+  const autoOn = () => !DEMO && 'serial' in navigator && $('optAuto').checked && !S.manualOff;
+  async function autoConnect() {
+    if (!autoOn() || S.connected || S.opening) return;
+    let ports = [];
+    try { ports = await navigator.serial.getPorts(); } catch (e) { return; }
+    if (!ports.length) {
+      let known = false; try { known = !!localStorage.getItem('stripcutter.port'); } catch (e) {}
+      if (!known && (S.state === 'off' || S.state === 'wait')) setState('off', 'Press Connect once and pick the Arduino\'s COM port. After that the app connects by itself.');
+      else if (known && S.state === 'off') setState('wait');
+      return;
+    }
+    if (S.state === 'off') setState('wait');
+    await openPort(pickPort(ports), true);
+  }
+  if ('serial' in navigator && !DEMO) {
+    navigator.serial.addEventListener('disconnect', ev => { if (S.port && ev.target === S.port) cleanup(true); });
+    navigator.serial.addEventListener('connect', () => { S.manualOff = false; setTimeout(autoConnect, 700); });
+    setInterval(autoConnect, 3000);
+  }
+
+  // ---------------------------------------------------------------- buttons
+  $('btnConnect').onclick = connect;
+  $('btnDisconnect').onclick = disconnect;
+  $('btnStart').onclick = () => { if ($('btnStart').disabled) return; notice(''); cmd('G'); };
+  $('btnStop').onclick = () => send('X');
+  $('btnNow').onclick = () => { send(busy() ? '!' : '!\n'); };
+  $('btnF1').onclick = () => cmd('F');
+  $('btnFn').onclick = () => { const n = Math.round(+$('nFeed').value); if (n >= 1 && n <= 60000) cmd('F' + n); else notice('The number of pieces to feed must be 1 to 60000.', true); };
+  $('btnC').onclick = () => cmd('C');
+  $('btnR').onclick = () => cmd('R');
+  $('btnK').onclick = () => { notice(''); cmd('K'); };
+  $('btnH').onclick = () => { notice(''); cmd('H'); };
+  $('btnW').onclick = () => cmd('W');
+  $('btnSetCount').onclick = () => {
+    const v = $('setCount').value.trim(), n = Math.round(+v);
+    if (v === '' || !(n >= 0 && n <= 99999999)) { notice('The count must be a whole number from 0 to 99999999.', true); return; }
+    notice(''); cmd('N' + n); $('setCount').value = '';
+  };
+  $('btnResetCount').onclick = () => { if (S.made === 0 || confirm('Reset the piece count from ' + S.made.toLocaleString('en-IN') + ' to 0?')) { notice(''); cmd('N0'); } };
+  const jog = sign => { const d = Math.round(+$('jogMm').value); if (d >= 1 && d <= 500) cmd('J' + (sign * d)); else notice('The jog distance must be 1 to 500 mm.', true); };
+  $('btnJf').onclick = () => jog(1); $('btnJb').onclick = () => jog(-1);
+  $('btnOp').onclick = () => offsetStep(1); $('btnOm').onclick = () => offsetStep(-1);
+  function offsetStep(dir) {
+    if (S.state === 'run' || S.state === 'measure') return send(dir > 0 ? '+' : '-');
+    const cur = S.cfg ? S.cfg.O : (+$('sO').value || 0), v = Math.max(-500, Math.min(500, cur + 10 * dir));
+    cmd('O' + v);
+  }
+  $('btnApply').onclick = async () => {
+    markEdited();
+    const { out, bad } = readInputs(true);
+    if (bad.length) { notice(bad.join('. ') + '.', true); return; }
+    notice('');
+    if (!out.length) { $('applyNote').textContent = 'Nothing to send: the Arduino already has these values.'; return; }
+    $('btnApply').disabled = true;
+    for (const [c, val] of out) { await cmd(c + val); await wait(180); }
+    await cmd('?');
+    $('applyNote').textContent = 'Sent. The Arduino keeps them.';
+  };
+  $('btnRead').onclick = () => { fillInputs(true); render(); $('applyNote').textContent = ''; };
+  FIELDS.forEach(id => $(id).addEventListener('input', () => { markEdited(); $('applyNote').textContent = pendingCount() ? 'Changed here, not sent yet.' : ''; render(); }));
+  const savePrefs = () => { try { localStorage.setItem('stripcutter.prefs', JSON.stringify({ hold: $('optHold').checked, auto: $('optAuto').checked })); } catch (e) {} };
+  (function loadPrefs() { try { const p = JSON.parse(localStorage.getItem('stripcutter.prefs') || 'null'); if (p) { $('optHold').checked = p.hold !== false; $('optAuto').checked = p.auto !== false; } } catch (e) {} })();
+  $('optHold').onchange = savePrefs;
+  $('optAuto').onchange = () => { savePrefs(); if ($('optAuto').checked) { S.manualOff = false; autoConnect(); } else if (!S.connected) setState('off'); };
+  $('optRaw').onchange = () => { $('log').textContent = ''; for (const l of S.logLines.slice(-400)) { const st = l[0] === '#'; if (st && !$('optRaw').checked) continue; const d = document.createElement('div'); d.textContent = l; if (st) d.className = 'st'; else if (l.startsWith('> ')) d.className = 'tx'; $('log').appendChild(d); } $('log').scrollTop = $('log').scrollHeight; };
+  $('btnClear').onclick = () => { $('log').textContent = ''; S.logLines = []; };
+  $('btnSave').onclick = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([S.logLines.join('\r\n')], { type: 'text/plain' })); a.download = 'strip_cutter_log.txt'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); };
+  const sendCmd = () => {
+    const v = $('cmd').value.trim(); if (!v) return;
+    if (busy() && S.state !== 'boot') {
+      if (/^[xX+\-!]$/.test(v)) send(v); else { notice('While the machine is running only X, +, - and ! can be sent.', true); return; }
+    } else cmd(v);
+    $('cmd').value = '';
+  };
+  $('btnSend').onclick = sendCmd;
+  $('cmd').addEventListener('keydown', e => { if (e.key === 'Enter') sendCmd(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && S.connected && S.state !== 'boot') { e.preventDefault(); $('btnNow').click(); } });
+  window.addEventListener('beforeunload', e => { if (S.connected && busy() && S.state !== 'boot') { e.preventDefault(); e.returnValue = ''; } });
+  setInterval(() => { if (S.connected) renderTiming(); }, 1000);
+
+  // ---------------------------------------------------------------- length correction calculator
+  $('btnCalc').onclick = () => {
+    const out = $('calOut');
+    if (!S.cfg || S.cfg.U === undefined) { out.textContent = 'Connect to an Arduino with the version 4 sketch first: the calculation starts from the correction it has now.'; return; }
+    const rows = [['c1s', 'c1m'], ['c2s', 'c2m']].map(([a, b]) => [parseFloat($(a).value), parseFloat($(b).value)]).filter(([s, m]) => s > 0 && m > 0);
+    if (!rows.length) { out.textContent = 'Enter at least one length set and the length you measured.'; return; }
+    const K0 = S.cfg.U, C0 = S.cfg.V, F = L => K0 * L + C0;     // net fed now for a set length
+    let K, C;
+    if (rows.length === 2 && Math.abs(rows[0][0] - rows[1][0]) >= 5) {
+      const [[l1, o1], [l2, o2]] = rows, f1 = F(l1), f2 = F(l2);
+      const alpha = (o1 - o2) / (f1 - f2), beta = o1 - alpha * f1;          // piece = alpha x net fed + beta
+      K = 1 / alpha; C = -beta / alpha;
+    } else {
+      if (rows.length === 2) { out.textContent = 'The two lengths set must differ by at least 5 mm. Using the first one only.'; }
+      const [l1, o1] = rows[0], r = l1 / o1;                                 // everything a bit longer (or shorter)
+      K = K0 * r; C = C0 * r;
+    }
+    if (!(K >= 0.5 && K <= 1.5 && C >= -50 && C <= 50)) { out.textContent = 'These numbers give a correction outside the allowed range (factor 0.5 to 1.5, offset −50 to 50 mm). Check the measurements.'; return; }
+    $('sU').value = K.toFixed(4); $('sV').value = C.toFixed(2);
+    markEdited(); render();
+    const L = S.cfg.L;
+    out.textContent = 'Factor ' + K0.toFixed(4) + ' → ' + K.toFixed(4) + ', offset ' + C0.toFixed(2) + ' → ' + C.toFixed(2) + ' mm. For ' + L + ' mm pieces the net fed changes from ' + F(L).toFixed(1) + ' to ' + (K * L + C).toFixed(1) + ' mm. Press Send to use it.';
+    $('applyNote').textContent = 'Changed here, not sent yet.';
+  };
+
+  // ---------------------------------------------------------------- demo Arduino (open the file with ?demo to try the panel without hardware)
+  const DEMO_MEM = { cfg: { L: 70, Q: 0, S: 1000, A: 6000, O: 20, T: 2000, U: 1.1494, V: -5.86, D: 60, E: 25, turn: 874 }, made: 0 };
+  class FakeArduinoPort {
+    constructor() { this.t = []; this.cfg = DEMO_MEM.cfg; this.mode = 'boot'; this.top = 1; this.test = 0; }
+    getInfo() { return {}; }
+    get made() { return DEMO_MEM.made; } set made(v) { DEMO_MEM.made = v; }
+    async open() {
+      const self = this;
+      this.readable = new ReadableStream({ start(c) { self.c = c; }, cancel() { self.stopAll(); } });
+      this.writable = new WritableStream({ write(chunk) { self.rx(new TextDecoder().decode(chunk)); } });
+      this.later(900, () => {
+        this.out('#B 4'); this.out('Strip cutter CONTINUOUS v4 ready. G = start, X = stop, F = feed one piece, H = park, ? = settings'); this.status(); this.out('#P ' + this.made); this.out('#S IDLE');
+        this.out('starting by itself in 3 s - send any key to cancel'); this.out('#A 3000'); this.mode = 'auto';
+        this.auto = this.later(3000, () => { this.mode = 'idle'; this.go(); });
+      });
+    }
+    async close() { this.stopAll(); try { this.c.close(); } catch (e) {} }
+    later(ms, f) { const h = setTimeout(f, ms); this.t.push(h); return h; }
+    stopAll() { this.t.forEach(clearTimeout); this.t = []; clearInterval(this.iv); }
+    out(s) { try { this.c.enqueue(enc.encode(s + '\r\n')); } catch (e) {} }
+    fl() { return this.cfg.U * this.cfg.L + this.cfg.V; }
+    feedMs() { const v0 = 20, vm = Math.max(v0, this.cfg.S), a = this.cfg.A, n = this.fl(), r = (vm * vm - v0 * v0) / (2 * a); return Math.round(1000 * (2 * r >= n ? 2 * (Math.sqrt(v0 * v0 + a * n) - v0) / a : 2 * (vm - v0) / a + (n - 2 * r) / vm)); }
+    status() { const c = this.cfg;
+      this.out('length ' + c.L.toFixed(1) + ' mm (feeds ' + this.fl().toFixed(1) + ' mm), stop at ' + c.Q + ', speed ' + c.S + ' mm/s, accel ' + c.A + ' mm/s2 (feed takes ' + this.feedMs() + ' ms), offset ' + c.O + ' ms, made ' + this.made + ', limit switch ' + (this.top ? 'PRESSED (knife at top)' : 'released'));
+      this.out('#C ' + c.L.toFixed(1) + ' ' + c.Q + ' ' + c.S + ' ' + c.O + ' ' + c.T + ' ' + this.made + ' ' + this.top + ' 17.44 ' + c.A + ' ' + c.U.toFixed(4) + ' ' + c.V.toFixed(2) + ' ' + c.D + ' ' + c.E + ' ' + c.turn); }
+    idle(msg) { this.stopAll(); this.mode = 'idle'; if (msg) this.out(msg); this.out('#S IDLE'); }
+    park(then) { this.out('#S PARK'); this.later(900, () => { this.top = 1; const n = Math.random() < .5 ? 0 : 1; this.out('#K ' + (n ? 1 : 0) + ' ' + n + ' ' + this.cfg.D); this.out('parked at the top' + (n ? ' after 1 nudge(s)' : '') + ', switch-off lead now ' + this.cfg.D + ' ms'); this.out('#T 1'); then(); }); }
+    go() {
+      const c = this.cfg;
+      if (c.Q > 0 && this.made >= c.Q) { this.out('NOT STARTED: the count has reached the target of ' + c.Q + ' pieces. Reset the count (N0) or raise the target (Q).'); this.out('#S IDLE'); return; }
+      this.mode = 'run'; this.stopQ = false;
+      this.out('GO continuous - measuring the cutter for 3 turns, no feeding yet'); this.out('#S MEASURE'); this.out('#P ' + this.made);
+      this.later(2600, () => {
+        const f = this.feedMs(), open = Math.round(0.3 * c.turn);
+        this.out('one turn ' + c.turn + ' ms, switch pressed 53 ms, feed of ' + this.fl().toFixed(1) + ' mm takes ' + f + ' ms, knife safely open ' + open + ' ms'); this.out('#M ' + c.turn + ' 53 ' + f + ' ' + open);
+        if (f > open) { this.out('NOT STARTED: the feed takes longer than the knife is open. Raise the acceleration (A) or the speed (S), or use a shorter piece (L).'); return this.park(() => this.idle('DONE, pieces made: ' + this.made)); }
+        this.out('#S RUN'); let first = true;
+        this.iv = setInterval(() => {
+          if (this.stopQ || (c.Q > 0 && this.made >= c.Q)) { clearInterval(this.iv); return this.park(() => this.idle('DONE, pieces made: ' + this.made)); }
+          this.made++; this.out('#P ' + this.made); if (first) { first = false; this.out('#M ' + c.turn + ' 53 ' + f + ' ' + open + ' ' + (f + 2)); }
+        }, c.turn);
+      });
+    }
+    feedTest(n) {
+      this.test = 0; this.mode = 'test'; this.stopQ = false;
+      this.out(n ? 'FEEDER TEST, pieces: ' + n + ' - cutter OFF' : 'FEEDER TEST, continuous - cutter OFF - send X to stop'); this.out('#S FEEDTEST'); this.out('#F 0');
+      const step = () => { this.test++; this.out('#F ' + this.test); if ((n && this.test >= n) || this.stopQ) { clearInterval(this.iv); this.idle('feeder test done: ' + this.test + ' pieces, ' + (this.test * this.fl()).toFixed(1) + ' mm of net fed'); } };
+      this.later(this.feedMs(), step); this.iv = setInterval(step, Math.min(this.cfg.T, 1200));
+    }
+    rx(text) {
+      if (this.mode === 'auto') { clearTimeout(this.auto); this.mode = 'idle'; this.out('automatic start cancelled'); }
+      if (this.mode === 'run' || this.mode === 'test') {
+        for (const ch of text) {
+          const c = ch.toUpperCase();
+          if (c === 'X') { this.stopQ = true; this.out('stopping'); }
+          else if (c === '!') { this.top = 0; this.stopAll(); this.mode = 'idle'; this.out('STOPPED NOW by request. Pieces made: ' + this.made); this.out('The knife may not be at the top: send H to park it before feeding.'); this.out('#S IDLE'); this.out('#T 0'); return; }
+          else if (c === '+' || c === '-') { this.cfg.O += c === '+' ? 10 : -10; this.out('#O ' + this.cfg.O); }
+        }
+        return;
+      }
+      for (const raw of text.split('\n')) {
+        const s = raw.trim(); if (!s) continue;
+        const c = s[0].toUpperCase(), v = parseFloat(s.slice(1)), has = !Number.isNaN(v), cf = this.cfg;
+        const set = (k, lo, hi, round) => { if (has && v >= lo && v <= hi) { cf[k] = round ? Math.round(v) : v; this.status(); return true; } return false; };
+        if (c === 'G') this.go();
+        else if (c === '?') this.status();
+        else if (c === '!') { this.out('cutter motor is off'); this.out('#S IDLE'); }
+        else if (c === 'K' || c === 'H') { this.out(c === 'K' ? '#S CUT' : '#S PARK'); this.mode = 'busy'; this.park(() => this.idle(c === 'K' ? 'cut done, knife at top' : 'knife at top')); }
+        else if (c === 'W') { this.out('watching pin 9 for 10 s - press and release the switch by hand'); this.out('#S WATCH'); this.mode = 'busy'; this.later(3000, () => this.idle('watch finished')); }
+        else if (c === 'N' && has && v >= 0) { this.made = Math.round(v); this.out('#P ' + this.made); this.status(); }
+        else if (c === 'F') this.feedTest(!has || v < 1 ? 1 : Math.round(v));
+        else if (c === 'C') this.feedTest(0);
+        else if (c === 'R' || c === 'J') { this.out('#S JOG'); this.mode = 'busy'; this.later(500, () => this.idle(c === 'R' ? 'done. Measure the length that came out.' : '')); }
+        else if (set(...({ L: ['L', 5, 2000], Q: ['Q', 0, 99999999, 1], S: ['S', 30, 2000, 1], A: ['A', 500, 30000, 1], O: ['O', -500, 500, 1], T: ['T', 200, 60000, 1], U: ['U', 0.5, 1.5], V: ['V', -50, 50], D: ['D', -100, 400, 1], E: ['E', 5, 100, 1] }[c] || ['?', 1, 0]))) {}
+        else this.out('commands: G K H W ? L Q S A O N U V D E Z J  feeder tests: F F5 C T R   (while running: X + - !)');
+      }
+    }
+  }
+
+  if (DEMO) { notice('Demo mode: this is a pretend Arduino, so you can try the buttons without the machine.'); window.__line = onLine; window.__S = S; }
+  else if (!('serial' in navigator)) notice('This browser cannot use COM ports. Open this file with Microsoft Edge or Google Chrome on the PC.', true);
+  render();
+  if (autoOn()) { setState('wait'); autoConnect(); }
+})();
+</script>
+</body>
+</html>

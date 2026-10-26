@@ -1,0 +1,9 @@
+# keep CAD, print and image files byte-exact
+*.stl  binary
+*.step binary
+*.3mf  binary
+*.f3d  binary
+*.png  binary
+*.pdf  binary
+# Windows batch files keep their CRLF line ends
+*.bat  -text

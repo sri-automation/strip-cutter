@@ -1,0 +1,1309 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d1214">
+<title>Strip Cutter</title>
+<style>
+:root {
+  --bg: #0d1214; --panel: #151c20; --panel2: #1c262b; --line: #2a373e; --text: #e8eef0; --dim: #93a4ab; --faint: #5d6e75;
+  --go: #22b35e; --golite: #6ee69a; --amber: #ffad1f; --red: #e5383b; --redlite: #ff8a8c; --blue: #2f9bff; --sel: #2a3a63;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Roboto Mono", monospace;
+  --r: 10px; --gut: 14px;
+}
+* { box-sizing: border-box; }
+html { scroll-padding-top: 140px; }
+@media (min-width: 860px) { html { scroll-padding-top: 184px; } }
+html, body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+body { min-height: 100vh; padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
+button, input, select { font: inherit; color: inherit; }
+a { color: var(--blue); }
+[hidden] { display: none !important; }
+
+/* header */
+.top { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 10px; height: 52px; padding: 0 14px; background: #0a0e10; border-bottom: 1px solid var(--line); }
+.brand { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
+.brand svg { flex: none; }
+.brand b { font-size: 16px; letter-spacing: .02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 520px) { .top.busy .brand b, .top.busy .brand span { display: none; } }
+.brand span { color: var(--dim); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 5px 11px; font-size: 13px; cursor: pointer; white-space: nowrap; max-width: 46vw; overflow: hidden; text-overflow: ellipsis; }
+.chip i { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
+.chip[data-s="up"] i { background: var(--go); box-shadow: 0 0 8px var(--go); }
+.chip[data-s="try"] i { background: var(--amber); }
+.chip[data-s="bad"] i { background: var(--red); }
+.hstop { border: 0; background: var(--red); color: #fff; font-weight: 800; letter-spacing: .06em; border-radius: 8px; padding: 7px 14px; cursor: pointer; box-shadow: 0 0 0 2px #0a0e10, 0 0 0 4px var(--red); }
+
+/* state band (same colours as the machine's screen) */
+.band { position: sticky; top: 52px; z-index: 15; display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: #1f2a30; transition: background .2s; }
+.band .t { flex: 1; min-width: 0; }
+.band b { display: block; font-size: 22px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+.band span { display: block; font-size: 13px; opacity: .85; }
+.band[data-c="go"] { background: var(--go); color: #fff; }
+.band[data-c="amber"] { background: var(--amber); color: #111; }
+.band[data-c="red"] { background: var(--red); color: #fff; }
+.band[data-c="blue"] { background: #1d4f80; }
+.band[data-c="off"] { background: #1a2226; color: var(--dim); }
+.knife { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; white-space: nowrap; }
+.knife i { width: 10px; height: 10px; border-radius: 50%; border: 2px solid currentColor; }
+.knife[data-top="1"] i { background: var(--golite); border-color: var(--golite); }
+.band[data-c="go"] .knife[data-top="1"] i { background: #fff; border-color: #fff; }
+
+.banners { display: grid; gap: 1px; }
+.banner { display: flex; align-items: flex-start; gap: 10px; padding: 10px 16px; font-size: 14px; background: #3a2a07; color: #ffd68a; }
+.banner.bad { background: #4a1416; color: #ffc2c3; }
+.banner.info { background: #12324f; color: #bfe0ff; }
+.banner p { margin: 0; flex: 1; }
+.banner button { flex: none; }
+
+main { max-width: 1060px; margin: 0 auto; padding: var(--gut); }
+.page { display: none; }
+.page.on { display: block; }
+.grid2 { display: grid; gap: 14px; }
+@media (min-width: 860px) { .grid2 { grid-template-columns: 1fr 1fr; align-items: start; } }
+.grid2 > div { min-width: 0; }
+@media (max-width: 360px) { :root { --gut: 10px; } .ctl input { width: 92px; } .ctl .u { width: 38px; } }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 14px; margin-bottom: 14px; }
+.card h2 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); font-weight: 700; display: flex; align-items: center; gap: 8px; }
+.card h2 .sp { flex: 1; }
+.muted { color: var(--dim); }
+.small { font-size: 13px; }
+.mono { font-family: var(--mono); }
+
+/* buttons */
+.btn { border: 1px solid var(--line); background: var(--panel2); border-radius: 8px; padding: 9px 14px; cursor: pointer; min-height: 40px; }
+.btn:hover:not(:disabled) { border-color: #3d4f57; background: #222e34; }
+.btn:disabled { opacity: .4; cursor: default; }
+.btn.pri { background: var(--blue); border-color: var(--blue); color: #fff; font-weight: 600; }
+.btn.go { background: var(--go); border-color: var(--go); color: #fff; font-weight: 600; }
+.btn.warn { background: transparent; border-color: #6b3133; color: var(--redlite); }
+.btn.sm { min-height: 32px; padding: 5px 10px; font-size: 13px; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.row + .row { margin-top: 8px; }
+
+/* run page */
+.count { display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
+.count .n { font-family: var(--mono); font-variant-numeric: tabular-nums; font-weight: 700; font-size: clamp(64px, 19vw, 128px); line-height: .9; letter-spacing: -.02em; }
+.count .side { padding-bottom: 6px; }
+.count .side b { display: block; font-size: 13px; text-transform: uppercase; letter-spacing: .1em; color: var(--dim); }
+.count .side span { font-size: 14px; }
+.prog { height: 8px; border-radius: 4px; background: var(--panel2); margin-top: 12px; overflow: hidden; }
+.prog b { display: block; height: 100%; width: 0; background: var(--go); transition: width .3s; }
+.flash { animation: fl .3s; }
+@keyframes fl { from { color: var(--golite); } }
+
+.actions { display: grid; gap: 10px; margin: 14px 0; }
+.hold { position: relative; overflow: hidden; border: 0; border-radius: 12px; min-height: 76px; background: #1a5c36; color: #fff; font-size: 20px; font-weight: 800; letter-spacing: .03em; cursor: pointer; touch-action: none; user-select: none; -webkit-user-select: none; }
+.hold small { display: block; font-size: 13px; font-weight: 500; opacity: .85; letter-spacing: 0; }
+.hold .fill { position: absolute; inset: 0 auto 0 0; width: 0; background: var(--go); }
+.hold.going .fill { width: 100%; transition: width .9s linear; }
+.hold span { position: relative; }
+.hold:disabled { background: #22302a; color: var(--faint); cursor: default; }
+.stops { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.bigbtn { border: 0; border-radius: 12px; min-height: 76px; font-size: 18px; font-weight: 800; cursor: pointer; }
+.bigbtn small { display: block; font-size: 12px; font-weight: 500; opacity: .85; }
+.bigbtn.stop { background: var(--amber); color: #111; }
+.bigbtn.now { background: var(--red); color: #fff; }
+.bigbtn:disabled { opacity: .35; cursor: default; }
+.why { margin: 0; font-size: 14px; color: var(--dim); }
+.why.bad { color: var(--redlite); }
+.facts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--line); border-radius: 8px; overflow: hidden; margin: 0; }
+.facts div { background: var(--panel); padding: 9px 10px; }
+.facts dt { font-size: 12px; color: var(--dim); }
+.facts dd { margin: 0; font-family: var(--mono); font-size: 16px; font-weight: 600; }
+.facts dd small { display: block; font-size: 11px; color: var(--dim); font-weight: 400; }
+.trim { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.trim .v { font-family: var(--mono); font-size: 20px; font-weight: 700; min-width: 80px; text-align: center; }
+.trim .btn { min-width: 64px; font-size: 18px; font-weight: 700; }
+.tbar { position: relative; height: 26px; border-radius: 6px; background: #3a1d1e; margin: 8px 0 4px; overflow: hidden; }
+.tbar .open { position: absolute; top: 0; bottom: 0; background: #1c4a2e; }
+.tbar .feed { position: absolute; top: 6px; bottom: 6px; background: var(--blue); border-radius: 3px; }
+.tbar .feed.bad { background: var(--red); }
+.tbar .mid { position: absolute; left: 50%; top: 0; bottom: 0; width: 2px; background: var(--text); opacity: .7; }
+.tlegend { display: flex; justify-content: space-between; font-size: 11px; color: var(--dim); }
+
+/* forms */
+.field { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
+.field:first-of-type { border-top: 0; }
+.field label { font-weight: 600; }
+.field .hint { grid-column: 1; font-size: 12px; color: var(--dim); }
+.field .ctl { grid-row: 1 / span 2; grid-column: 2; display: flex; align-items: center; gap: 6px; }
+.ctl input, .inp { width: 108px; background: #0b1012; border: 1px solid var(--line); border-radius: 7px; padding: 8px 10px; text-align: right; font-family: var(--mono); }
+.inp.wide { width: 100%; text-align: left; font-family: inherit; }
+input:focus, select:focus, button:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.ctl .u { width: 46px; font-size: 13px; color: var(--dim); }
+input.edited { border-color: var(--amber); background: #2a2008; }
+.sendbar { position: sticky; bottom: calc(64px + env(safe-area-inset-bottom)); display: flex; gap: 8px; align-items: center; padding: 10px; margin: 0 calc(-1 * var(--gut)); background: rgba(13, 18, 20, .94); border-top: 1px solid var(--line); backdrop-filter: blur(4px); }
+@media (min-width: 860px) { .sendbar { bottom: 0; } }
+.sendbar .btn.pri.pending { background: var(--amber); border-color: var(--amber); color: #111; }
+details.adv > summary { cursor: pointer; color: var(--dim); padding: 8px 0; }
+.cal { display: grid; grid-template-columns: auto 1fr 1fr; gap: 6px 8px; align-items: center; margin: 8px 0; }
+.cal input { width: 100%; }
+.cal .h { font-size: 12px; color: var(--dim); }
+label.chk { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; padding: 6px 0; cursor: pointer; }
+label.chk input { margin-top: 3px; }
+.lbl { display: block; font-size: 13px; color: var(--dim); margin: 10px 0 4px; }
+
+/* tests */
+.tgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.tgrid .btn { min-height: 54px; text-align: left; }
+.tgrid .btn small { display: block; font-size: 12px; color: var(--dim); }
+
+/* wifi */
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 0; }
+.kv dt { color: var(--dim); font-size: 13px; }
+.kv dd { margin: 0; font-size: 14px; word-break: break-word; }
+.bars { display: inline-flex; align-items: flex-end; gap: 2px; height: 14px; vertical-align: -2px; margin-right: 6px; }
+.bars i { width: 4px; background: var(--faint); border-radius: 1px; }
+.bars i:nth-child(1) { height: 4px; } .bars i:nth-child(2) { height: 7px; } .bars i:nth-child(3) { height: 10px; } .bars i:nth-child(4) { height: 14px; }
+.bars i.on { background: var(--golite); }
+.list { list-style: none; margin: 0; padding: 0; }
+.list li { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line); }
+.list li:first-child { border-top: 0; }
+.list li .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tag { font-size: 11px; padding: 2px 7px; border-radius: 999px; background: var(--panel2); color: var(--dim); white-space: nowrap; }
+.tag.g { background: #173d27; color: var(--golite); }
+.scan li { cursor: pointer; }
+.scan li:hover { background: var(--panel2); }
+
+/* connect */
+.how { display: grid; gap: 14px; }
+@media (min-width: 860px) { .how { grid-template-columns: repeat(3, 1fr); align-items: start; } }
+.how .card { margin: 0; }
+.how h3 { margin: 0 0 6px; font-size: 17px; }
+.how p { margin: 6px 0; font-size: 14px; color: var(--dim); }
+.how .btn { width: 100%; margin-top: 8px; }
+.dip { font-family: var(--mono); font-size: 12px; color: var(--dim); }
+
+/* log */
+.log { height: 52vh; overflow: auto; background: #080b0c; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-family: var(--mono); font-size: 12.5px; white-space: pre-wrap; word-break: break-word; }
+.log .tx { color: #7cc4ff; }
+.log .st { color: var(--faint); }
+.log .err { color: #ffb4a8; }
+.log .app { color: #c8b6ff; }
+.log .old { opacity: .55; }
+.cmdline { display: flex; gap: 8px; margin-top: 8px; }
+.cmdline input { flex: 1; text-align: left; width: auto; }
+
+/* tabs */
+.tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; display: grid; grid-template-columns: repeat(5, 1fr); background: #0a0e10; border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom); }
+.tabs button { border: 0; background: none; color: var(--dim); padding: 8px 2px 7px; font-size: 11px; cursor: pointer; display: grid; justify-items: center; gap: 2px; }
+.tabs button svg { width: 22px; height: 22px; }
+.tabs button.on { color: var(--text); }
+.tabs button.on svg { color: var(--blue); }
+.tabs button:disabled { opacity: .35; }
+@media (min-width: 860px) {
+  body { padding-bottom: 0; }
+  .tabs { position: sticky; top: 52px; bottom: auto; height: 44px; grid-template-columns: repeat(5, max-content); justify-content: center; gap: 4px; border-top: 0; border-bottom: 1px solid var(--line); padding: 0; }
+  .band { top: 96px; }
+  .tabs button { grid-auto-flow: column; gap: 6px; font-size: 14px; padding: 10px 16px; align-items: center; }
+  .tabs button svg { width: 18px; height: 18px; }
+  .tabs button.on { box-shadow: inset 0 -2px var(--blue); }
+}
+
+dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 12px; padding: 18px; width: min(92vw, 400px); }
+dialog::backdrop { background: rgba(0, 0, 0, .6); }
+dialog h3 { margin: 0 0 8px; }
+dialog p { margin: 6px 0 10px; color: var(--dim); font-size: 14px; }
+.toast { position: fixed; left: 50%; bottom: calc(80px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 50; max-width: min(92vw, 520px); background: #24323a; border: 1px solid #3a4b54; border-radius: 10px; padding: 10px 14px; font-size: 14px; box-shadow: 0 8px 30px rgba(0, 0, 0, .5); opacity: 0; pointer-events: none; transition: opacity .2s; }
+.toast.on { opacity: 1; }
+.toast.bad { background: #4a1416; border-color: #7a2a2c; }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="brand">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><rect x="1" y="15" width="24" height="5" rx="1" fill="#2f9bff"/><path d="M13 2 L18 13 H8 Z" fill="#e8eef0"/><rect x="12" y="13" width="2" height="9" fill="#e5383b"/></svg>
+    <b>Strip cutter</b><span id="mName"></span>
+  </div>
+  <button class="chip" id="chip" data-s="off" title="Connection"><i></i><span id="chipText">Not connected</span></button>
+  <button class="hstop" id="hStop" hidden title="Stop now (Esc)">STOP</button>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button data-p="pgRun"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M10 8l6 4-6 4z" fill="currentColor"/></svg>Run</button>
+  <button data-p="pgSet"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>Settings</button>
+  <button data-p="pgTest"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 3v6l-5 9a2 2 0 0 0 2 3h12a2 2 0 0 0 2-3l-5-9V3M8 3h8"/></svg>Tests</button>
+  <button data-p="pgWifi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 9a15 15 0 0 1 20 0M5 13a10 10 0 0 1 14 0M8.5 16.5a5 5 0 0 1 7 0"/><circle cx="12" cy="20" r="1" fill="currentColor"/></svg>Wi-Fi</button>
+  <button data-p="pgLog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"/></svg>Log</button>
+</nav>
+
+<div class="band" id="band" data-c="off">
+  <div class="t"><b id="stTitle">Not connected</b><span id="stDetail">Choose how to reach the machine.</span></div>
+  <div class="knife" id="knife" data-top=""><i></i><span id="knifeText"></span></div>
+</div>
+<div class="banners" id="banners"></div>
+
+<main>
+  <!-- ======================================================= connect -->
+  <section class="page" id="pgConnect">
+    <div class="how">
+      <div class="card" id="howWifi">
+        <h3>Same Wi-Fi as the machine</h3>
+        <p>Fastest. Open <b>http://stripcutter.local</b> or the address on the machine's screen (Wi-Fi &amp; remote).</p>
+        <label class="lbl" for="wAddr">Machine address</label>
+        <input class="inp wide" id="wAddr" placeholder="stripcutter.local or 192.168.1.42" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <button class="btn pri" id="btnWifi">Connect over Wi-Fi</button>
+        <p id="wifiNote" class="small"></p>
+      </div>
+      <div class="card" id="howCloud">
+        <h3>From anywhere (cloud)</h3>
+        <p>Works over mobile data, from any place. Set up the cloud once on the Wi-Fi page while you are near the machine.</p>
+        <label class="lbl" for="cUrl">Cloud server (WebSocket)</label>
+        <input class="inp wide" id="cUrl" placeholder="wss://xxxx.s1.eu.hivemq.cloud:8884/mqtt" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <label class="lbl" for="cUser">User name</label>
+        <input class="inp wide" id="cUser" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <label class="lbl" for="cPass">Password</label>
+        <input class="inp wide" id="cPass" type="password" autocomplete="off">
+        <label class="lbl" for="cId">Machine ID</label>
+        <input class="inp wide" id="cId" placeholder="stripcutter-a1b2c3" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <button class="btn pri" id="btnCloud">Connect through the cloud</button>
+      </div>
+      <div class="card" id="howUsb">
+        <h3>USB cable (PC)</h3>
+        <p>Edge or Chrome on a PC. Board DIP switches <b>3 and 4 ON</b>, all others off.</p>
+        <label class="chk"><input type="checkbox" id="optHold" checked><span>When the board restarts on connecting, hold its automatic start</span></label>
+        <button class="btn pri" id="btnUsb">Connect over USB</button>
+        <p id="usbNote" class="small"></p>
+      </div>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <h2>DIP switches on the Uno + WiFi board</h2>
+      <p class="dip">1 2 ON → machine uses Wi-Fi (normal use)<br>3 4 ON → PC talks to the machine over USB<br>5 6 7 ON → upload the Wi-Fi module sketch &nbsp;·&nbsp; 3 4 ON → upload the machine sketch</p>
+    </div>
+  </section>
+
+  <!-- ======================================================= run -->
+  <section class="page" id="pgRun">
+    <div class="grid2">
+      <div>
+        <div class="card">
+          <div class="count">
+            <div class="n" id="made">0</div>
+            <div class="side"><b>pieces</b><span id="target">no stop count</span><br><span class="muted small" id="totalTxt"></span></div>
+          </div>
+          <div class="prog" id="prog" hidden><b></b></div>
+          <div class="actions">
+            <button class="hold" id="btnStart" disabled><div class="fill"></div><span>Hold to start<small>cutter and feeder together</small></span></button>
+            <div class="stops">
+              <button class="bigbtn stop" id="btnStop" disabled>Stop<small>after this piece, knife parks</small></button>
+              <button class="bigbtn now" id="btnNow" disabled>Stop now<small>cutter off at once</small></button>
+            </div>
+            <p class="why" id="why"></p>
+          </div>
+        </div>
+        <div class="card">
+          <h2>Count</h2>
+          <div class="row">
+            <input class="inp" id="setCount" type="number" min="0" max="99999999" step="1" placeholder="count" aria-label="New piece count" style="width:120px">
+            <button class="btn ctrl" id="btnSetCount">Set count</button>
+            <button class="btn warn ctrl" id="btnResetCount">Reset to 0</button>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="card">
+          <h2>Running</h2>
+          <dl class="facts">
+            <div><dt>Length</dt><dd id="fLen">–</dd></div>
+            <div><dt>Pieces/min</dt><dd id="fRate">–</dd></div>
+            <div><dt>One turn</dt><dd id="fTurn">–</dd></div>
+            <div><dt>Feed takes</dt><dd id="fFeed">–</dd></div>
+            <div><dt>Knife open</dt><dd id="fOpen">–</dd></div>
+            <div><dt>Net per piece</dt><dd id="fNet">–</dd></div>
+          </dl>
+          <div class="trim">
+            <button class="btn" id="btnOm" aria-label="Feed 10 ms earlier">−</button>
+            <div style="flex:1;text-align:center"><div class="v" id="oVal">–</div><div class="small muted">feed timing</div></div>
+            <button class="btn" id="btnOp" aria-label="Feed 10 ms later">+</button>
+          </div>
+          <div class="tbar" id="tbar"><div class="open" id="tOpen"></div><div class="feed" id="tFeed"></div><div class="mid"></div></div>
+          <div class="tlegend"><span>knife closing</span><span>top</span><span>knife closing</span></div>
+          <p class="small muted" id="timingNote">Shown after the cutter has been measured (first three turns of a run).</p>
+          <p class="small muted" id="parkNote"></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================================================= settings -->
+  <section class="page" id="pgSet">
+    <div class="grid2">
+      <div>
+        <div class="card">
+          <h2>Piece</h2>
+          <div class="field"><label for="sL">Piece length</label><div class="hint">5 to 2000 mm</div>
+            <div class="ctl"><input type="number" id="sL" min="5" max="2000" step="0.5" data-cmd="L" data-dp="1"><span class="u">mm</span></div></div>
+          <div class="field"><label for="sQ">Stop at count</label><div class="hint">stops by itself at this count, 0 = off</div>
+            <div class="ctl"><input type="number" id="sQ" min="0" max="99999999" step="1" data-cmd="Q" data-dp="0"><span class="u"></span></div></div>
+        </div>
+        <div class="card">
+          <h2>Feed</h2>
+          <div class="field"><label for="sS">Speed</label><div class="hint">30 to 2000 mm/s</div>
+            <div class="ctl"><input type="number" id="sS" min="30" max="2000" step="50" data-cmd="S" data-dp="0"><span class="u">mm/s</span></div></div>
+          <div class="field"><label for="sA">Acceleration</label><div class="hint">500 to 30000 mm/s²</div>
+            <div class="ctl"><input type="number" id="sA" min="500" max="30000" step="500" data-cmd="A" data-dp="0"><span class="u">mm/s²</span></div></div>
+          <div class="field"><label for="sO">Feed timing</label><div class="hint">+ = feed later in the turn</div>
+            <div class="ctl"><input type="number" id="sO" min="-500" max="500" step="10" data-cmd="O" data-dp="0"><span class="u">ms</span></div></div>
+          <div class="field"><label for="sT">Test rhythm</label><div class="hint">time between test feeds</div>
+            <div class="ctl"><input type="number" id="sT" min="200" max="60000" step="100" data-cmd="T" data-dp="0"><span class="u">ms</span></div></div>
+        </div>
+      </div>
+      <div>
+        <div class="card">
+          <h2>Length correction</h2>
+          <div class="field"><label for="sU">Factor</label><div class="hint" id="netHint">net fed = factor × length + offset</div>
+            <div class="ctl"><input type="number" id="sU" min="0.5" max="1.5" step="0.001" data-cmd="U" data-dp="4"><span class="u"></span></div></div>
+          <div class="field"><label for="sV">Offset</label><div class="hint">−50 to 50 mm</div>
+            <div class="ctl"><input type="number" id="sV" min="-50" max="50" step="0.1" data-cmd="V" data-dp="2"><span class="u">mm</span></div></div>
+          <details class="adv"><summary>Work it out from measured pieces</summary>
+            <p class="small muted">Cut pieces, measure them, enter the length set and the length you measured. Two different lengths give the best result.</p>
+            <div class="cal">
+              <span></span><span class="h">set (mm)</span><span class="h">measured (mm)</span>
+              <span>1</span><input class="inp" type="number" id="c1s" step="0.5"><input class="inp" type="number" id="c1m" step="0.1">
+              <span>2</span><input class="inp" type="number" id="c2s" step="0.5"><input class="inp" type="number" id="c2m" step="0.1">
+            </div>
+            <button class="btn" id="btnCalc">Work out the correction</button>
+            <p class="small" id="calOut"></p>
+          </details>
+        </div>
+        <div class="card">
+          <details class="adv"><summary>Parking at the top (learnt by itself)</summary>
+            <div class="field"><label for="sD">Switch-off lead</label><div class="hint">motor off this long before the top</div>
+              <div class="ctl"><input type="number" id="sD" min="-100" max="400" step="5" data-cmd="D" data-dp="0"><span class="u">ms</span></div></div>
+            <div class="field"><label for="sE">Nudge</label><div class="hint">one short push if it stops short</div>
+              <div class="ctl"><input type="number" id="sE" min="5" max="100" step="1" data-cmd="E" data-dp="0"><span class="u">ms</span></div></div>
+          </details>
+          <div class="row" style="margin-top:10px"><button class="btn warn ctrl" id="btnDefaults">Factory settings</button></div>
+        </div>
+      </div>
+    </div>
+    <div class="sendbar">
+      <button class="btn pri ctrl" id="btnApply">Send to the machine</button>
+      <button class="btn ctrl" id="btnUndo">Undo</button>
+      <span class="small muted" id="applyNote"></span>
+    </div>
+  </section>
+
+  <!-- ======================================================= tests -->
+  <section class="page" id="pgTest">
+    <div class="card">
+      <h2>Feeder (cutter stays off)</h2>
+      <div class="tgrid">
+        <button class="btn ctrl" id="tF1">Feed one piece<small>at the set length</small></button>
+        <button class="btn ctrl" id="tC">Feed until stopped<small>one piece per test rhythm</small></button>
+        <button class="btn ctrl" id="tR">Roller one turn<small>check steps per turn</small></button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <span>Feed</span><input class="inp" id="nFeed" type="number" value="5" min="1" max="60000" style="width:80px"><span class="small muted">pieces</span>
+        <button class="btn ctrl" id="tFn">Go</button>
+        <span class="small muted" id="testCount"></span>
+      </div>
+      <div class="row">
+        <span>Jog</span><input class="inp" id="jogMm" type="number" value="20" min="1" max="500" style="width:80px"><span class="small muted">mm</span>
+        <button class="btn ctrl" id="tJb">Back</button><button class="btn ctrl" id="tJf">Forward</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Knife</h2>
+      <div class="tgrid">
+        <button class="btn ctrl" id="tK">One cut<small>and park at the top</small></button>
+        <button class="btn ctrl" id="tH">Park the knife<small>bring it to the top</small></button>
+        <button class="btn ctrl" id="tW">Switch test<small>press it by hand, STOP ends</small></button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================================================= wifi -->
+  <section class="page" id="pgWifi">
+    <div class="card" id="wfUsb" hidden><p class="muted" style="margin:0">Over the USB cable the app talks to the machine controller only. Connect over Wi-Fi or the cloud to see and change the Wi-Fi settings.</p></div>
+    <div id="wfBody">
+      <div class="grid2">
+        <div>
+          <div class="card">
+            <h2>Status<span class="sp"></span><button class="btn sm" id="wfRefresh">Refresh</button></h2>
+            <dl class="kv" id="wfStatus"></dl>
+          </div>
+          <div class="card">
+            <h2>Saved networks<span class="sp"></span><span class="small muted" id="wfCount"></span></h2>
+            <p class="small muted" style="margin-top:0">At power-on and whenever the Wi-Fi drops, the machine joins the strongest of these.</p>
+            <ul class="list" id="wfSaved"></ul>
+            <div class="row" style="margin-top:10px">
+              <button class="btn" id="wfScan">Find networks</button>
+              <button class="btn" id="wfJoin">Join the best now</button>
+            </div>
+            <ul class="list scan" id="wfScanList" style="margin-top:8px"></ul>
+            <div id="wfAdd" hidden>
+              <label class="lbl" for="wfSsid">Network name</label>
+              <input class="inp wide" id="wfSsid" autocomplete="off" autocapitalize="off" spellcheck="false">
+              <label class="lbl" for="wfPass">Wi-Fi password (empty for an open network)</label>
+              <input class="inp wide" id="wfPass" type="password" autocomplete="off">
+              <div class="row" style="margin-top:10px"><button class="btn pri" id="wfSave">Save network</button><button class="btn" id="wfCancel">Cancel</button></div>
+            </div>
+            <div class="row"><button class="btn sm" id="wfManual">Type a network name</button></div>
+          </div>
+        </div>
+        <div>
+          <div class="card">
+            <h2>Cloud (use the app from anywhere)</h2>
+            <p class="small muted" style="margin-top:0">Free HiveMQ Cloud cluster: make one at console.hivemq.cloud, add a user under Access Management, then enter its details here. Commands from the cloud are signed with the machine password.</p>
+            <label class="chk"><input type="checkbox" id="clOn"><span>Connect the machine to the cloud</span></label>
+            <label class="lbl" for="clHost">Server (cluster URL)</label>
+            <input class="inp wide" id="clHost" placeholder="xxxx.s1.eu.hivemq.cloud" autocomplete="off" autocapitalize="off" spellcheck="false">
+            <div class="row" style="margin-top:6px"><span class="small muted">TLS port</span><input class="inp" id="clPort" type="number" value="8883" style="width:90px"><span class="small muted">app port</span><input class="inp" id="clWsPort" type="number" value="8884" style="width:90px"></div>
+            <label class="lbl" for="clUser">User name</label>
+            <input class="inp wide" id="clUser" autocomplete="off" autocapitalize="off" spellcheck="false">
+            <label class="lbl" for="clPass">Password</label>
+            <input class="inp wide" id="clPass" type="password" autocomplete="off">
+            <label class="chk"><input type="checkbox" id="clVerify" checked><span>Check the server's certificate (needs internet time)</span></label>
+            <div class="row"><button class="btn pri" id="clSave">Save cloud settings</button></div>
+            <p class="small muted" id="clInfo"></p>
+            <div class="row"><button class="btn sm" id="clLink">Copy setup link for another phone</button></div>
+          </div>
+          <div class="card">
+            <h2>Machine</h2>
+            <label class="lbl" for="mnName">Name (address http://name.local)</label>
+            <div class="row"><input class="inp" id="mnName" style="width:180px;text-align:left" autocapitalize="off" spellcheck="false"><button class="btn" id="mnSave">Save name</button></div>
+            <label class="lbl">Machine password (app login, setup hotspot, updates)</label>
+            <div class="row"><input class="inp" id="pwOld" type="password" placeholder="old" style="width:130px;text-align:left"><input class="inp" id="pwNew" type="password" placeholder="new, 8+ chars" style="width:150px;text-align:left"><button class="btn" id="pwSave">Change</button></div>
+            <div class="row" style="margin-top:14px">
+              <button class="btn" id="wfAp">Open setup hotspot</button>
+              <button class="btn warn" id="wfRestart">Restart Wi-Fi module</button>
+            </div>
+            <p class="small muted" id="otaNote"></p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================================================= log -->
+  <section class="page" id="pgLog">
+    <div class="card">
+      <h2>Messages<span class="sp"></span>
+        <label class="small" style="text-transform:none;letter-spacing:0;font-weight:400"><input type="checkbox" id="optRaw"> status lines</label>
+        <button class="btn sm" id="btnSave">Save</button><button class="btn sm" id="btnClear">Clear</button></h2>
+      <div class="log" id="log" role="log"></div>
+      <div class="cmdline"><input class="inp" id="cmd" placeholder="command, e.g. L75 or ?" autocomplete="off" autocapitalize="off" spellcheck="false"><button class="btn" id="btnSend">Send</button></div>
+      <p class="small muted">Commands are framed (@L75*hh) by the app. G start · X stop · ! stop now · L length · Q stop count · S speed · A accel · O timing · N count · F feed · H park · ? status</p>
+    </div>
+  </section>
+</main>
+
+<dialog id="dlgKey">
+  <form method="dialog" id="keyForm">
+    <h3>Machine password</h3>
+    <p id="keyWhy">Enter the machine password.</p>
+    <input class="inp wide" id="keyIn" type="password" autocomplete="current-password" required minlength="8">
+    <label class="chk"><input type="checkbox" id="keyRemember" checked><span>Remember on this device</span></label>
+    <div class="row" style="justify-content:flex-end;margin-top:8px"><button class="btn" value="cancel" formnovalidate>Cancel</button><button class="btn pri" value="ok">Log in</button></div>
+  </form>
+</dialog>
+<div class="toast" id="toast"></div>
+
+<script>
+(() => {
+'use strict';
+const $ = id => document.getElementById(id);
+const enc = new TextEncoder(), dec = new TextDecoder();
+const params = new URLSearchParams(location.search);
+const store = {
+  get(k, d) { try { const v = localStorage.getItem('sc.' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem('sc.' + k, JSON.stringify(v)); } catch (e) {} },
+  del(k) { try { localStorage.removeItem('sc.' + k); } catch (e) {} }
+};
+const FROM_MACHINE = location.protocol === 'http:' && !params.has('nomachine');   // page served by the Wi-Fi module
+const SECURE_PAGE = location.protocol === 'https:';
+const ONLINE_APP = 'https://sri-automation.github.io/strip-cutter/';   // the online copy of this app (GitHub Pages)
+
+// ============================================================ SHA-256 / HMAC (same as the Wi-Fi module)
+const K256 = new Uint32Array([0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2]);
+function sha256(msg) {
+  const l = msg.length, nb = ((l + 9 + 63) >> 6) << 6, m = new Uint8Array(nb);
+  m.set(msg); m[l] = 0x80;
+  const dv = new DataView(m.buffer), bits = l * 8;
+  dv.setUint32(nb - 4, bits >>> 0); dv.setUint32(nb - 8, Math.floor(bits / 4294967296));
+  const H = new Uint32Array([0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19]), W = new Uint32Array(64);
+  const r = (x, n) => (x >>> n) | (x << (32 - n));
+  for (let o = 0; o < nb; o += 64) {
+    for (let i = 0; i < 16; i++) W[i] = dv.getUint32(o + i * 4);
+    for (let i = 16; i < 64; i++) { const a = W[i - 15], b = W[i - 2]; W[i] = W[i - 16] + (r(a, 7) ^ r(a, 18) ^ (a >>> 3)) + W[i - 7] + (r(b, 17) ^ r(b, 19) ^ (b >>> 10)); }
+    let a = H[0], b = H[1], c = H[2], d = H[3], e = H[4], f = H[5], g = H[6], h = H[7];
+    for (let i = 0; i < 64; i++) {
+      const t1 = (h + (r(e, 6) ^ r(e, 11) ^ r(e, 25)) + ((e & f) ^ (~e & g)) + K256[i] + W[i]) >>> 0;
+      const t2 = ((r(a, 2) ^ r(a, 13) ^ r(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) >>> 0;
+      h = g; g = f; f = e; e = (d + t1) >>> 0; d = c; c = b; b = a; a = (t1 + t2) >>> 0;
+    }
+    H[0] += a; H[1] += b; H[2] += c; H[3] += d; H[4] += e; H[5] += f; H[6] += g; H[7] += h;
+  }
+  const out = new Uint8Array(32), ov = new DataView(out.buffer);
+  for (let i = 0; i < 8; i++) ov.setUint32(i * 4, H[i]);
+  return out;
+}
+function hmac32(key, text) {     // first 16 bytes of HMAC-SHA256 as hex
+  let k = enc.encode(key); if (k.length > 64) k = sha256(k);
+  const kb = new Uint8Array(64); kb.set(k);
+  const m = enc.encode(text), a = new Uint8Array(64 + m.length), b = new Uint8Array(96);
+  for (let i = 0; i < 64; i++) { a[i] = kb[i] ^ 0x36; b[i] = kb[i] ^ 0x5c; }
+  a.set(m, 64); b.set(sha256(a), 64);
+  return Array.from(sha256(b).slice(0, 16), x => x.toString(16).padStart(2, '0')).join('');
+}
+
+// ============================================================ small MQTT 3.1.1 client over WebSocket (QoS 0)
+class Mqtt {
+  constructor(url, user, pass) { this.url = url; this.user = user; this.pass = pass; this.buf = new Uint8Array(0); this.id = 1; this.up = false; }
+  connect() {
+    let ws;
+    try { ws = this.ws = new WebSocket(this.url, ['mqtt']); } catch (e) { setTimeout(() => this.onClose && this.onClose('bad cloud address'), 0); return; }
+    ws.binaryType = 'arraybuffer';
+    ws.onopen = () => {
+      const s = x => { const b = enc.encode(x); return [b.length >> 8, b.length & 255, ...b]; };
+      let flags = 0x02; const pay = s('sc-app-' + Math.random().toString(36).slice(2, 10));
+      if (this.user) { flags |= 0x80; pay.push(...s(this.user)); }
+      if (this.pass) { flags |= 0x40; pay.push(...s(this.pass)); }
+      this.pkt(0x10, [...s('MQTT'), 4, flags, 0, 60, ...pay]);
+    };
+    ws.onmessage = e => { this.seen = Date.now(); this.feed(new Uint8Array(e.data)); };
+    ws.onerror = () => { this.why = this.why || 'cannot reach the cloud server'; };
+    ws.onclose = () => { clearInterval(this.ping); const was = this.up; this.up = false; this.ws = null; this.onClose && this.onClose(this.why || (was ? 'cloud connection lost' : 'cannot reach the cloud server')); };
+  }
+  pkt(type, body) {
+    if (!this.ws || this.ws.readyState !== 1) return false;
+    const len = []; let n = body.length;
+    do { let d = n % 128; n = Math.floor(n / 128); if (n) d |= 128; len.push(d); } while (n);
+    const out = new Uint8Array(1 + len.length + body.length);
+    out[0] = type; out.set(len, 1); out.set(body, 1 + len.length);
+    this.ws.send(out); return true;
+  }
+  feed(bytes) {
+    const b = new Uint8Array(this.buf.length + bytes.length); b.set(this.buf); b.set(bytes, this.buf.length); this.buf = b;
+    for (;;) {
+      if (this.buf.length < 2) return;
+      let mul = 1, len = 0, i = 1, d;
+      do { if (i >= this.buf.length) return; d = this.buf[i++]; len += (d & 127) * mul; mul *= 128; } while (d & 128);
+      if (this.buf.length < i + len) return;
+      const t = this.buf[0], body = this.buf.slice(i, i + len);
+      this.buf = this.buf.slice(i + len);
+      this.handle(t, body);
+    }
+  }
+  handle(t, d) {
+    const type = t >> 4;
+    if (type === 2) {                                   // CONNACK
+      if (d[1] === 0) {
+        this.up = true; this.seen = Date.now();
+        this.ping = setInterval(() => { if (Date.now() - this.seen > 95000) { this.why = 'cloud connection lost'; this.ws && this.ws.close(); } else this.pkt(0xC0, []); }, 30000);
+        this.onUp && this.onUp();
+      } else { this.why = d[1] === 4 || d[1] === 5 ? 'the cloud server refused the user name or password' : 'the cloud server refused the connection (code ' + d[1] + ')'; this.ws.close(); }
+    } else if (type === 3) {                            // PUBLISH
+      const qos = (t >> 1) & 3, tl = d[0] << 8 | d[1], topic = dec.decode(d.slice(2, 2 + tl));
+      let p = 2 + tl;
+      if (qos) { const pid = [d[p], d[p + 1]]; p += 2; if (qos === 1) this.pkt(0x40, pid); else this.pkt(0x50, pid); }
+      this.onMessage && this.onMessage(topic, dec.decode(d.slice(p)), !!(t & 1));
+    } else if (type === 6) this.pkt(0x70, [d[0], d[1]]);   // PUBREL -> PUBCOMP
+  }
+  subscribe(topics) {
+    const s = x => { const b = enc.encode(x); return [b.length >> 8, b.length & 255, ...b]; };
+    const id = this.id++, body = [id >> 8, id & 255];
+    for (const t of topics) body.push(...s(t), 0);
+    this.pkt(0x82, body);
+  }
+  publish(topic, text) {
+    const tb = enc.encode(topic), pb = enc.encode(text), body = new Uint8Array(2 + tb.length + pb.length);
+    body[0] = tb.length >> 8; body[1] = tb.length & 255; body.set(tb, 2); body.set(pb, 2 + tb.length);
+    return this.pkt(0x30, body);
+  }
+  close() { this.onClose = null; clearInterval(this.ping); try { this.pkt(0xE0, []); } catch (e) {} try { this.ws && this.ws.close(); } catch (e) {} }
+}
+
+// ============================================================ the three ways to reach the machine
+// Each link calls: ui.linkState(text, s)  onLine(line)  needKey(reason)
+class WifiLink {
+  constructor(host) { this.kind = 'wifi'; this.host = host; this.retry = 0; this.authed = false; }
+  get label() { return 'Wi-Fi · ' + this.host; }
+  url() {
+    const port = params.get('ws') || '81';
+    return 'ws://' + this.host.replace(/^https?:\/\//, '').replace(/[:/].*$/, '') + ':' + port + '/';
+  }
+  open() {
+    this.closed = false; this.needLogin = false;
+    linkState('Connecting to ' + this.host + '…', 'try');
+    let ws;
+    try { ws = this.ws = new WebSocket(this.url()); } catch (e) { linkState('Cannot open ' + this.host, 'bad'); return; }
+    ws.onmessage = e => { for (const l of String(e.data).split('\n')) if (l) this.line(l.replace(/\r$/, '')); };
+    ws.onclose = () => {
+      this.ws = null; const was = this.authed; this.authed = false;
+      if (this.closed) return;
+      linkDown(was ? 'Wi-Fi connection lost. Trying again…' : 'No answer from ' + this.host + '. Trying again…');
+      if (!this.needLogin) this.timer = setTimeout(() => this.open(), Math.min(15000, 1500 * ++this.retry));
+    };
+  }
+  line(l) {
+    if (!this.authed) {
+      if (l.startsWith('$HELLO ')) {
+        const p = l.split(' '); this.nonce = p[1]; S.machineName = p[2] || S.machineName;
+        const key = this.key || store.get('key', '');
+        if (key) this.auth(key); else { this.needLogin = true; needKey(this, 'first'); }
+        return;
+      }
+      if (l === '$AUTH ok') { this.authed = true; this.retry = 0; this.needLogin = false; linkUp(this); return; }
+      if (l === '$AUTH bad') { this.needLogin = true; this.key = ''; store.del('key'); needKey(this, 'bad'); return; }
+      if (l === '$AUTH wait') { this.needLogin = true; needKey(this, 'wait'); return; }
+    }
+    onLine(l);
+  }
+  auth(key) { this.key = key; if (this.ws && this.ws.readyState === 1 && this.nonce) this.ws.send('$AUTH\t' + hmac32(key, 'auth:' + this.nonce)); else this.open(); }
+  login(key) { this.key = key; this.needLogin = false; if (this.ws && this.ws.readyState === 1 && this.nonce) this.auth(key); else this.open(); }
+  send(line) { if (this.ws && this.ws.readyState === 1 && this.authed) { this.ws.send(line); return true; } return false; }
+  close() { this.closed = true; clearTimeout(this.timer); try { this.ws && this.ws.close(); } catch (e) {} }
+}
+
+class CloudLink {
+  constructor(c) { this.kind = 'cloud'; this.c = c; this.retry = 0; this.nonce = ''; this.seq = Date.now(); this.wait = []; this.machineOnline = null; }
+  get label() { return 'Cloud · ' + this.c.id; }
+  get base() { return 'stripcutter/' + this.c.id; }
+  open() {
+    this.closed = false;
+    linkState('Connecting to the cloud…', 'try');
+    const m = this.mq = new Mqtt(this.c.url, this.c.user, this.c.pass);
+    m.onUp = () => {
+      this.retry = 0;
+      m.subscribe([this.base + '/state', this.base + '/out', this.base + '/online']);
+      linkUp(this);
+      if (!this.key && !store.get('key', '')) needKey(this, 'first');
+      this.stateTimer = setTimeout(() => { if (!this.gotState) banner('cloud', 'Connected to the cloud, but nothing has arrived from machine "' + this.c.id + '" yet. Check the machine ID and that the machine is online (Wi-Fi page on the machine\'s screen shows Cloud: online).', 'info'); }, 6000);
+    };
+    m.onMessage = (topic, text) => {
+      if (topic.endsWith('/online')) { this.machineOnline = text === '1'; renderSoon(); return; }
+      if (topic.endsWith('/state')) { this.gotState = true; this.stateAt = Date.now(); banner('cloud'); }
+      for (const l of text.split('\n')) if (l) this.line(l);
+    };
+    m.onClose = why => {
+      clearTimeout(this.stateTimer);
+      if (this.closed) return;
+      const refused = /refused the user/.test(why);
+      linkDown(why[0].toUpperCase() + why.slice(1) + (refused ? '. Check the cloud user name and password.' : '. Trying again…'), refused);
+      if (!refused) this.timer = setTimeout(() => this.open(), Math.min(30000, 2000 * ++this.retry));
+    };
+    m.connect();
+  }
+  line(l) {
+    if (l.startsWith('$W ')) { try { this.nonce = JSON.parse(l.slice(3)).nonce || this.nonce; } catch (e) {} this.flushWait(); }
+    if (l.startsWith('$NONCE ')) { this.nonce = l.slice(7).trim(); if (this.last && !this.last.retried) { this.last.retried = true; this.publish(this.last.body); } return; }
+    if (l === '$AUTH bad') { this.key = ''; store.del('key'); needKey(this, 'bad'); return; }
+    onLine(l);
+  }
+  sign(body) {
+    const key = this.key || store.get('key', '');
+    if (!key) return null;
+    const seq = String(++this.seq);
+    return '$SIG\t' + this.nonce + '\t' + seq + '\t' + hmac32(key, this.nonce + '\t' + seq + '\n' + body) + '\n' + body;
+  }
+  publish(body) {
+    const msg = this.sign(body);
+    if (msg === null) return false;
+    this.last = { body, retried: this.last && this.last.body === body ? this.last.retried : false };
+    return this.mq.publish(this.base + '/in', msg);
+  }
+  flushWait() { if (!this.nonce || !(this.key || store.get('key', '')) || !this.mq || !this.mq.up) return; const w = this.wait; this.wait = []; for (const b of w) this.publish(b); }
+  send(line) {
+    if (!this.mq || !this.mq.up) return false;
+    if (!this.nonce || !(this.key || store.get('key', ''))) {      // wait for the machine's nonce and the password
+      this.wait.push(line);
+      if (!(this.key || store.get('key', ''))) needKey(this, 'first');
+      return true;
+    }
+    return this.publish(line);
+  }
+  login(key) { this.key = key; this.flushWait(); }
+  close() { this.closed = true; clearTimeout(this.timer); clearTimeout(this.stateTimer); this.mq && this.mq.close(); }
+}
+
+class UsbLink {
+  constructor(port) { this.kind = 'usb'; this.port = port; }
+  get label() { return 'USB cable'; }
+  async open() {
+    this.closed = false;
+    linkState('Opening the USB port…', 'try');
+    try { await this.port.open({ baudRate: 115200 }); }
+    catch (e) { linkDown('The USB port is in use (Arduino IDE Serial Monitor?) or not the machine. ' + e.message, true); S.link = null; render(); return; }
+    this.writer = this.port.writable.getWriter();
+    linkUp(this);
+    S.state = 'boot'; render();
+    this.read();
+    this.bootTimer = setTimeout(() => { if (!S.lastLineAt) { this.send(frame('?')); setTimeout(() => { if (S.link === this && !S.lastLineAt) banner('usb', 'Nothing came back over USB. Check the DIP switches (3 and 4 ON, others off) and that the machine sketch is loaded.', 'bad'); }, 1500); } }, 3500);
+  }
+  async read() {
+    let buf = '';
+    try {
+      this.reader = this.port.readable.getReader();
+      for (;;) {
+        const { value, done } = await this.reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf('\n')) >= 0) { const l = buf.slice(0, i).replace(/\r$/, ''); buf = buf.slice(i + 1); if (l.trim()) onLine(l); }
+      }
+    } catch (e) { if (!this.closed) log('USB: ' + e.message, 'err'); }
+    finally { try { this.reader.releaseLock(); } catch (e) {} if (!this.closed) { this.cleanup(); linkDown('The USB cable was unplugged or the board lost power.'); } }
+  }
+  send(line) { if (!this.writer) return false; this.writer.write(enc.encode(line + '\n')).catch(e => log('USB: ' + e.message, 'err')); return true; }
+  async cleanup() { clearTimeout(this.bootTimer); try { this.reader && await this.reader.cancel(); } catch (e) {} try { this.writer && this.writer.releaseLock(); } catch (e) {} try { await this.port.close(); } catch (e) {} this.writer = null; }
+  close() { this.closed = true; this.cleanup(); }
+}
+
+// ============================================================ state
+const S = {
+  link: null, up: false, linkText: 'Not connected', linkS: 'off', machineName: '',
+  fw: 0, state: 'off', made: 0, total: 0, testMade: 0, cfg: null, m: null, top: null,
+  pieceTimes: [], lastLineAt: 0, replay: false, autoUntil: 0, heldAuto: false,
+  wifi: null, saved: null, scan: null, faultText: '', noteText: '', page: 'pgConnect'
+};
+const STATES = {
+  off: ['Not connected', 'Choose how to reach the machine.', 'off'],
+  link: ['Connecting', '', 'blue'],
+  boot: ['Starting', 'Waiting for the machine controller.', 'blue'],
+  idle: ['Ready', 'Nothing is running.', ''],
+  measure: ['Measuring', 'Three turns without feeding, then cutting starts.', 'go'],
+  run: ['Cutting', 'Cutter and feeder are running.', 'go'],
+  test: ['Feed test', 'Cutter off, only the net moves.', 'amber'],
+  cut: ['One cut', 'One stroke, then the knife parks at the top.', 'amber'],
+  park: ['Parking', 'Bringing the knife to the top.', 'amber'],
+  jog: ['Jog', 'Moving the net.', 'amber'],
+  watch: ['Switch test', 'Press and release the limit switch by hand. Stop ends the test.', 'amber'],
+  fault: ['Fault', 'The machine stopped. Read the message, fix it, then start again.', 'red']
+};
+const SMAP = { IDLE: 'idle', MEASURE: 'measure', RUN: 'run', FEEDTEST: 'test', CUT: 'cut', PARK: 'park', JOG: 'jog', WATCH: 'watch', FAULT: 'fault' };
+const busy = () => !['idle', 'fault', 'off', 'link', 'boot'].includes(S.state);
+const remoteOk = () => !S.cfg || S.cfg.remote !== 0;
+const canCtl = () => S.up && S.fw && remoteOk() && !busy() && S.state !== 'boot';
+const FIELDS = ['sL', 'sQ', 'sS', 'sA', 'sO', 'sT', 'sU', 'sV', 'sD', 'sE'];
+
+// ============================================================ log, toast, banners
+const logLines = [];
+function log(text, cls) {
+  logLines.push((cls === 'tx' ? '> ' : '') + text);
+  if (logLines.length > 4000) logLines.splice(0, 1000);
+  if (cls === 'st' && !$('optRaw').checked) return;
+  const el = $('log'), atEnd = el.scrollTop + el.clientHeight >= el.scrollHeight - 30;
+  const d = document.createElement('div');
+  d.className = (cls || '') + (S.replay ? ' old' : '');
+  d.textContent = (cls === 'tx' ? '> ' : '') + text;
+  el.appendChild(d);
+  while (el.childNodes.length > 600) el.removeChild(el.firstChild);
+  if (atEnd) el.scrollTop = el.scrollHeight;
+}
+let toastTimer;
+function toast(text, bad) { const t = $('toast'); t.textContent = text; t.classList.toggle('bad', !!bad); t.classList.add('on'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('on'), bad ? 6000 : 3500); }
+const banners = {};
+function banner(key, text, kind, btn) {
+  if (!text) delete banners[key]; else banners[key] = { text, kind, btn };
+  const box = $('banners'); box.textContent = '';
+  for (const k of ['fault', 'remote', 'auto', 'note', 'usb', 'cloud', 'link']) {
+    const b = banners[k]; if (!b) continue;
+    const d = document.createElement('div'); d.className = 'banner ' + (b.kind || '');
+    const p = document.createElement('p'); p.textContent = b.text; d.appendChild(p);
+    if (b.btn) { const x = document.createElement('button'); x.className = 'btn sm'; x.textContent = b.btn[0]; x.onclick = b.btn[1]; d.appendChild(x); }
+    box.appendChild(d);
+  }
+}
+
+// ============================================================ commands to the machine
+function frame(c) { let x = 0; for (const ch of c) x ^= ch.charCodeAt(0) & 255; return '@' + c + '*' + x.toString(16).toUpperCase().padStart(2, '0'); }
+const Q = { items: [], timer: null };
+function pump() {
+  if (Q.timer || !Q.items.length) return;
+  const l = Q.items.shift();
+  if (S.link) S.link.send(l);
+  Q.timer = setTimeout(() => { Q.timer = null; pump(); }, 140);     // the machine reads one line at a time
+}
+function cmd(c, quiet) {
+  if (!S.link || !S.up) { toast('Not connected', true); return; }
+  if (!quiet) log(c, 'tx');
+  Q.items.push(frame(c)); pump();
+}
+function cmdNow(c) {                 // stop commands: at once, ahead of anything waiting
+  if (!S.link || !S.up) return;
+  if (c === '!') Q.items = [];
+  log(c, 'tx'); S.link.send(frame(c));
+}
+const control = (c, needIdle = true) => {
+  if (!S.up) return toast('Not connected', true);
+  if (!remoteOk()) return toast('Remote control is switched off on the machine\'s screen.', true);
+  if (needIdle && busy()) return toast('The machine is busy. Stop it first.', true);
+  banner('note'); cmd(c);
+};
+
+// ============================================================ lines from the machine
+function onLine(l) {
+  if (l[0] === '$') return onModule(l);
+  S.lastLineAt = Date.now();
+  if (l[0] === '#') { log(l, 'st'); onStatus(l); renderSoon(); return; }
+  const bad = /^(STOPPED|NOT STARTED|NOTE:|LOCKED|FAULT)/.test(l);
+  log(l, bad ? 'err' : '');
+  if (/^STOPPED: /.test(l)) { S.faultText = l.slice(9); banner('fault', 'Stopped: ' + S.faultText, 'bad', ['Clear', () => { S.faultText = ''; banner('fault'); }]); if (!S.replay) toTop(); }
+  else if (/^NOT STARTED: /.test(l)) banner('note', 'Not started: ' + l.slice(13), 'bad', ['OK', () => banner('note')]);
+  else if (/^NOTE: /.test(l)) banner('note', l.slice(6), '', ['OK', () => banner('note')]);
+  else if (/^LOCKED/.test(l)) toast('Remote control is switched off on the machine\'s screen.', true);
+  else if (/^automatic start cancelled/.test(l)) { S.autoUntil = 0; banner('auto'); }
+  else if (/^stopping$/.test(l)) toast('Stopping after this piece…');
+}
+function onStatus(l) {
+  const p = l.slice(1).trim().split(/\s+/), k = p[0];
+  if (k === 'B') { S.fw = +p[1] || 1; banner('usb'); if (S.fw < 5) banner('note', 'This machine has an older sketch (v' + S.fw + '). Load FeedCutHMI v5 for the screen, Wi-Fi and this app.', 'bad'); }
+  else if (k === 'S') {
+    const st = SMAP[p[1]] || 'idle';
+    if (st === 'measure' || st === 'test') { S.pieceTimes = []; if (st === 'test') S.testMade = 0; }
+    if (['measure', 'test', 'cut', 'jog', 'watch'].includes(st)) { banner('fault'); banner('note'); S.faultText = ''; }
+    if (st === 'fault' && !S.replay) toTop();
+    if (st !== 'idle' && st !== 'fault') { S.autoUntil = 0; banner('auto'); }
+    S.state = st;
+    if (['measure', 'run', 'cut', 'park'].includes(st)) S.top = 'moving';
+  }
+  else if (k === 'P') {
+    const n = +p[1];
+    if (!S.replay && n === S.made + 1 && S.state === 'run') { S.pieceTimes.push(performance.now()); if (S.pieceTimes.length > 40) S.pieceTimes.shift(); flashCount(); }
+    S.made = n; if (p[2] !== undefined) S.total = +p[2];
+  }
+  else if (k === 'F') { const n = +p[1]; if (!S.replay && n > S.testMade) { S.pieceTimes.push(performance.now()); if (S.pieceTimes.length > 40) S.pieceTimes.shift(); } S.testMade = n; }
+  else if (k === 'C') {
+    const c = { L: +p[1], Q: +p[2], S: +p[3], O: +p[4], T: +p[5] };
+    if (p.length >= 15) Object.assign(c, { A: +p[9], U: +p[10], V: +p[11], D: +p[12], E: +p[13], turn: +p[14] });
+    if (p.length >= 17) Object.assign(c, { remote: +p[15], auto: +p[16] });
+    S.cfg = c; S.made = +p[6]; S.top = p[7] === '1';
+    if (S.state === 'boot' || S.state === 'link') S.state = 'idle';
+    fillInputs();
+    banner('remote', c.remote === 0 ? 'Remote control is switched off on the machine\'s screen (Wi-Fi & remote → Remote control). You can watch, and stop the machine, but not start or change it.' : '', 'info');
+  }
+  else if (k === 'O') { if (S.cfg) { S.cfg.O = +p[1]; fillInputs(); } }
+  else if (k === 'M') { S.m = { turn: +p[1], pressed: +p[2], feed: +p[3], open: +p[4], actual: p[5] !== undefined ? +p[5] : (S.m && S.m.turn === +p[1] ? S.m.actual : undefined) }; }
+  else if (k === 'T') { if (!['measure', 'run', 'cut', 'park'].includes(S.state)) S.top = p[1] === '1'; }
+  else if (k === 'A') onAutoStart(+p[1] || 3000);
+  else if (k === 'R') toast('Refused: remote control is switched off on the machine\'s screen.', true);
+  else if (k === 'K') {
+    const r = +p[1], n = +p[2], lead = +p[3];
+    if (S.cfg) { S.cfg.D = lead; fillInputs(); }
+    $('parkNote').textContent = 'Last stop: ' + (r === 0 ? 'coasted onto the top' : r === 1 ? 'reached the top with ' + n + ' nudge' + (n === 1 ? '' : 's') : r === 2 ? 'went past the top' : 'stopped') + '. Motor now switches off ' + lead + ' ms before the top.';
+  }
+}
+const toTop = () => window.scrollTo({ top: 0, behavior: 'smooth' });
+function onAutoStart(ms) {
+  if (S.replay) return;
+  S.autoUntil = Date.now() + ms;
+  toTop();
+  if (S.link && S.link.kind === 'usb' && $('optHold').checked && !S.heldAuto) { S.heldAuto = true; cmd('?', true); log('Holding the automatic start.', 'app'); return; }
+  const tick = () => {
+    const left = Math.ceil((S.autoUntil - Date.now()) / 1000);
+    if (!S.autoUntil || left <= 0) { banner('auto'); return; }
+    banner('auto', 'The machine starts cutting by itself in ' + left + ' s.', 'bad', ['Cancel', () => { cmd('?'); S.autoUntil = 0; banner('auto'); }]);
+    setTimeout(tick, 250);
+  };
+  tick();
+}
+function onModule(l) {
+  const sp = l.indexOf(' '), k = sp < 0 ? l : l.slice(0, sp), rest = sp < 0 ? '' : l.slice(sp + 1);
+  if (k === '$SNAP') { S.replay = rest === '1'; return; }
+  if (k === '$W') { try { S.wifi = JSON.parse(rest); S.wifiAt = Date.now(); S.machineName = S.wifi.name || S.machineName; } catch (e) {} renderWifi(); renderSoon(); return; }
+  if (k === '$L') { try { S.saved = JSON.parse(rest); } catch (e) {} fillWifiForms(); renderWifi(); return; }
+  if (k === '$N') { try { S.scan = JSON.parse(rest); } catch (e) { S.scan = []; } $('wfScan').disabled = false; renderScan(); return; }
+  if (k === '$OK') {
+    if (/^password changed/.test(rest) && S.pendingKey) { if (store.get('key', '')) store.set('key', S.pendingKey); if (S.link) S.link.key = S.pendingKey; S.pendingKey = ''; }
+    toast(rest); log(rest, 'app'); return;
+  }
+  if (k === '$ERR') { if (/password/.test(rest)) S.pendingKey = ''; toast(rest, true); log(rest, 'err'); return; }
+  if (k === '$PONG') return;
+  log(l, 'app');
+}
+
+// ============================================================ link state
+function linkState(text, s) { S.linkText = text; S.linkS = s; if (!S.up) S.state = s === 'off' ? 'off' : 'link'; renderSoon(); }
+function linkUp(link) {
+  if (link !== S.link) return;
+  S.up = true; S.linkText = link.label; S.linkS = 'up';
+  banner('link');
+  if (S.state === 'off' || S.state === 'link') S.state = link.kind === 'usb' ? 'boot' : 'boot';
+  store.set('last', link.kind);
+  if (S.page === 'pgConnect') showPage('pgRun');
+  setTimeout(() => { if (S.link === link && S.up && !S.cfg && link.kind !== 'usb') cmd('?', true); }, 2500);
+  renderSoon();
+}
+function linkDown(text, hard) {
+  S.up = false; S.linkS = hard ? 'bad' : 'try'; S.linkText = text;
+  if (S.state !== 'off') S.state = 'link';
+  banner('link', text, hard ? 'bad' : 'info');
+  renderSoon();
+}
+function useLink(link) {
+  if (S.link) S.link.close();
+  Object.assign(S, { link, up: false, fw: 0, cfg: null, m: null, top: null, made: 0, total: 0, state: 'link', wifi: null, saved: null, scan: null, lastLineAt: 0, heldAuto: false, replay: false });
+  Q.items = [];
+  for (const k of ['fault', 'remote', 'auto', 'note', 'usb', 'cloud', 'link']) banner(k);
+  link.open();
+  render();
+}
+
+// password prompt
+let keyFor = null;
+function needKey(link, why) {
+  keyFor = link;
+  $('keyWhy').textContent = why === 'bad' ? 'That password was not accepted. Enter the machine password again.'
+    : why === 'wait' ? 'Too many wrong passwords. Wait a minute, then try again.'
+    : 'Enter the machine password. A new machine uses "stripcutter" until you change it on the Wi-Fi page.';
+  $('keyIn').value = '';
+  if (!$('dlgKey').open) $('dlgKey').showModal();
+  linkState(why === 'bad' ? 'Wrong password' : 'Password needed', 'bad');
+}
+$('keyForm').addEventListener('submit', e => {
+  const btn = e.submitter && e.submitter.value;
+  if (btn !== 'ok') { keyFor = null; return; }
+  const k = $('keyIn').value;
+  if ($('keyRemember').checked) store.set('key', k); else store.del('key');
+  if (keyFor) { keyFor.login(k); keyFor = null; }
+  if (S.up && S.link) { S.linkText = S.link.label; S.linkS = 'up'; renderSoon(); }
+});
+
+// ============================================================ rendering
+let rq = 0;
+function renderSoon() { if (!rq) rq = requestAnimationFrame(() => { rq = 0; render(); }); }
+const fmtN = n => Number(n).toLocaleString('en-IN');
+function flashCount() { const e = $('made'); e.classList.remove('flash'); void e.offsetWidth; e.classList.add('flash'); }
+function render() {
+  const st = STATES[S.state] || STATES.idle;
+  $('stTitle').textContent = S.state === 'link' ? (S.linkS === 'bad' ? 'Not connected' : 'Connecting') : st[0];
+  $('stDetail').textContent = S.state === 'link' ? S.linkText : (S.state === 'run' && S.cfg ? 'Cutting ' + S.cfg.L + ' mm pieces.' : st[1]);
+  $('band').dataset.c = S.state === 'idle' ? '' : st[2];
+  const kn = $('knife');
+  if (!S.up || S.top === null) { kn.dataset.top = ''; $('knifeText').textContent = ''; }
+  else if (S.top === 'moving') { kn.dataset.top = ''; $('knifeText').textContent = 'knife moving'; }
+  else { kn.dataset.top = S.top ? '1' : '0'; $('knifeText').textContent = S.top ? 'knife at the top' : 'knife not at the top'; }
+  // header
+  $('chip').dataset.s = S.linkS; $('chipText').textContent = S.linkText;
+  if (S.link && S.link.kind === 'cloud' && S.up && S.link.machineOnline === false) { $('chip').dataset.s = 'bad'; $('chipText').textContent = 'Cloud · machine offline'; }
+  $('mName').textContent = S.machineName && S.machineName !== 'stripcutter' ? S.machineName : '';
+  $('hStop').hidden = !(S.up && busy());
+  document.querySelector('.top').classList.toggle('busy', S.up && busy());
+  // tabs
+  for (const b of document.querySelectorAll('#tabs button')) { b.classList.toggle('on', b.dataset.p === S.page); }
+  // run page
+  $('made').textContent = fmtN(S.made);
+  const q = S.cfg ? S.cfg.Q : 0;
+  $('target').textContent = q > 0 ? 'stops at ' + fmtN(q) : 'no stop count';
+  $('totalTxt').textContent = S.total ? fmtN(S.total) + ' ever' : '';
+  $('prog').hidden = !(q > 0); $('prog').firstElementChild.style.width = q > 0 ? Math.min(100, 100 * S.made / q) + '%' : '0';
+  const ctl = canCtl(), blk = startBlock();
+  $('btnStart').disabled = !ctl || !!blk;
+  $('why').textContent = blk ? blk.text : (S.up && !remoteOk() ? 'Remote control is off on the machine.' : '');
+  $('why').classList.toggle('bad', !!(blk && blk.bad));
+  $('btnStop').disabled = !(S.up && ['run', 'measure', 'test', 'watch'].includes(S.state));
+  $('btnNow').disabled = !S.up;
+  const running = S.state === 'run' || S.state === 'measure';
+  $('btnOm').disabled = $('btnOp').disabled = !(S.up && remoteOk() && (running || ctl));
+  $('oVal').textContent = S.cfg ? (S.cfg.O > 0 ? '+' : '') + S.cfg.O + ' ms' : '–';
+  $('fLen').textContent = S.cfg ? S.cfg.L + ' mm' : '–';
+  $('fNet').textContent = S.cfg && S.cfg.U !== undefined ? (S.cfg.U * S.cfg.L + S.cfg.V).toFixed(1) + ' mm' : '–';
+  for (const e of document.querySelectorAll('.ctrl')) e.disabled = !ctl;
+  $('btnApply').disabled = !ctl;
+  const pend = pendingCount();
+  $('btnApply').classList.toggle('pending', pend > 0);
+  $('btnApply').textContent = pend ? 'Send ' + pend + ' change' + (pend > 1 ? 's' : '') : 'Send to the machine';
+  $('btnUndo').disabled = !pend;
+  $('testCount').textContent = S.state === 'test' || S.testMade ? 'test feeds: ' + S.testMade : '';
+  if (S.cfg && S.cfg.U !== undefined) $('netHint').textContent = 'net fed = factor × length + offset = ' + (S.cfg.U * S.cfg.L + S.cfg.V).toFixed(1) + ' mm for ' + S.cfg.L + ' mm';
+  $('cmd').disabled = $('btnSend').disabled = !S.up;
+  // wifi page availability
+  const viaUsb = S.link && S.link.kind === 'usb';
+  $('wfUsb').hidden = !viaUsb; $('wfBody').hidden = !!viaUsb;
+  renderTiming();
+}
+function startBlock() {
+  if (!S.up || !S.fw || busy()) return '';
+  const n = pendingCount();
+  if (n) return { bad: false, text: (n === 1 ? 'One setting is' : n + ' settings are') + ' changed here but not sent. Send (or undo) before starting.' };
+  if (S.cfg && S.cfg.Q > 0 && S.made >= S.cfg.Q) return { bad: true, text: 'The count has reached the stop count (' + fmtN(S.cfg.Q) + '). Reset the count or raise the stop count.' };
+  return '';
+}
+function renderTiming() {
+  const m = S.m, o = S.cfg ? S.cfg.O : 0;
+  $('fTurn').textContent = m ? m.turn + ' ms' : (S.cfg && S.cfg.turn ? S.cfg.turn + ' ms' : '–');
+  $('fFeed').innerHTML = m ? m.feed + ' ms' + (m.actual ? '<small>measured ' + m.actual + '</small>' : '') : '–';
+  $('fOpen').textContent = m ? m.open + ' ms' : '–';
+  const now = performance.now(), t = S.pieceTimes.filter(x => now - x < 30000);
+  $('fRate').textContent = (S.state === 'run' || S.state === 'test') && t.length >= 2 ? (60000 * (t.length - 1) / (t[t.length - 1] - t[0])).toFixed(1) : '–';
+  if (!m || !m.turn) { $('tOpen').style.width = '0'; $('tFeed').style.width = '0'; return; }
+  const pc = x => 100 * x / m.turn;
+  $('tOpen').style.left = (50 - pc(m.open) / 2) + '%'; $('tOpen').style.width = pc(m.open) + '%';
+  const fl = 50 - pc(m.feed) / 2 + pc(o), fr = fl + pc(m.feed);
+  $('tFeed').style.left = fl + '%'; $('tFeed').style.width = pc(m.feed) + '%';
+  const lo = 50 - pc(m.open) / 2, hi = 50 + pc(m.open) / 2, bad = fl < lo - 0.01 || fr > hi + 0.01;
+  $('tFeed').classList.toggle('bad', bad);
+  const early = Math.round((lo - fl) * m.turn / 100), late = Math.round((fr - hi) * m.turn / 100);
+  $('timingNote').textContent = bad
+    ? (late > 0 ? 'The feed ends ' + late + ' ms after the knife starts to close. Feed earlier (−), or raise the acceleration.' : 'The feed starts ' + early + ' ms before the knife is open. Feed later (+), or raise the acceleration.')
+    : 'The feed fits in the open time: ' + Math.round((fl - lo) * m.turn / 100) + ' ms to spare before it, ' + Math.round((hi - fr) * m.turn / 100) + ' ms after.';
+}
+
+// ============================================================ settings boxes
+const dp = e => +e.dataset.dp;
+const fmtV = (e, v) => (v === undefined || v === null || Number.isNaN(+v)) ? '' : String(+(+v).toFixed(dp(e)));
+const cfgVal = e => S.cfg ? S.cfg[e.dataset.cmd] : undefined;
+function isEdited(e) {
+  const c = cfgVal(e); if (c === undefined) return false;
+  const v = parseFloat(e.value);
+  if (Number.isNaN(v)) return e.value.trim() !== '';
+  return Math.abs(v - c) > Math.pow(10, -dp(e)) / 2;
+}
+function markEdited() { for (const id of FIELDS) $(id).classList.toggle('edited', isEdited($(id))); }
+const pendingCount = () => FIELDS.filter(id => $(id).classList.contains('edited')).length;
+function fillInputs(force) {
+  if (!S.cfg) return;
+  for (const id of FIELDS) { const e = $(id), v = cfgVal(e); if (v === undefined) continue; if (force || !e.classList.contains('edited')) e.value = fmtV(e, v); }
+  markEdited();
+}
+function readInputs() {
+  const out = [], bad = [];
+  for (const id of FIELDS) {
+    const e = $(id); if (!e.classList.contains('edited')) continue;
+    const v = parseFloat(e.value), min = +e.min, max = +e.max;
+    if (Number.isNaN(v) || v < min || v > max) { bad.push(e.closest('.field').querySelector('label').textContent + ' must be ' + min + ' to ' + max); continue; }
+    out.push(e.dataset.cmd + (+v.toFixed(dp(e))));
+  }
+  return { out, bad };
+}
+FIELDS.forEach(id => $(id).addEventListener('input', () => { markEdited(); $('applyNote').textContent = pendingCount() ? 'Changed here, not sent yet.' : ''; render(); }));
+$('btnApply').onclick = () => {
+  markEdited();
+  const { out, bad } = readInputs();
+  if (bad.length) { toast(bad.join('. ') + '.', true); return; }
+  if (!out.length) { $('applyNote').textContent = 'The machine already has these values.'; return; }
+  if (!remoteOk()) { toast('Remote control is switched off on the machine\'s screen.', true); return; }
+  for (const c of out) cmd(c);
+  $('applyNote').textContent = 'Sent. The machine keeps them after a power cut.';
+};
+$('btnUndo').onclick = () => { fillInputs(true); $('applyNote').textContent = ''; render(); };
+$('btnDefaults').onclick = () => { if (confirm('Put all settings back to the factory values? (The piece count and the learnt parking stay.)')) control('Z'); };
+$('btnCalc').onclick = () => {
+  const out = $('calOut');
+  if (!S.cfg || S.cfg.U === undefined) { out.textContent = 'Connect to the machine first: the calculation starts from the correction it has now.'; return; }
+  const rows = [['c1s', 'c1m'], ['c2s', 'c2m']].map(([a, b]) => [parseFloat($(a).value), parseFloat($(b).value)]).filter(([s, m]) => s > 0 && m > 0);
+  if (!rows.length) { out.textContent = 'Enter at least one length set and the length you measured.'; return; }
+  const K0 = S.cfg.U, C0 = S.cfg.V, F = L => K0 * L + C0;
+  let K, C;
+  if (rows.length === 2 && Math.abs(rows[0][0] - rows[1][0]) >= 5) {
+    const [[l1, o1], [l2, o2]] = rows, f1 = F(l1), f2 = F(l2), al = (o1 - o2) / (f1 - f2), be = o1 - al * f1;
+    K = 1 / al; C = -be / al;
+  } else { const [l1, o1] = rows[0], r = l1 / o1; K = K0 * r; C = C0 * r; }
+  if (!(K >= 0.5 && K <= 1.5 && C >= -50 && C <= 50)) { out.textContent = 'These numbers give a correction outside the allowed range (factor 0.5 to 1.5, offset −50 to 50 mm). Check the measurements.'; return; }
+  $('sU').value = K.toFixed(4); $('sV').value = C.toFixed(2); markEdited(); render();
+  out.textContent = 'Factor ' + K0.toFixed(4) + ' → ' + K.toFixed(4) + ', offset ' + C0.toFixed(2) + ' → ' + C.toFixed(2) + ' mm. Press Send to use it.';
+};
+
+// ============================================================ run page buttons
+(function holdToStart() {
+  const b = $('btnStart'); let t = null;
+  const go = () => { b.classList.remove('going'); t = null; if (!b.disabled) { banner('note'); banner('fault'); S.faultText = ''; cmd('G'); } };
+  const down = e => { if (b.disabled || t) return; e.preventDefault(); b.classList.add('going'); t = setTimeout(go, 900); };
+  const up = () => { if (t) { clearTimeout(t); t = null; b.classList.remove('going'); toast('Keep holding to start'); } };
+  b.addEventListener('pointerdown', down); b.addEventListener('pointerup', up); b.addEventListener('pointerleave', up); b.addEventListener('pointercancel', up);
+  b.addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && !e.repeat) down(e); });
+  b.addEventListener('keyup', e => { if (e.key === 'Enter' || e.key === ' ') up(); });
+  b.addEventListener('contextmenu', e => e.preventDefault());
+})();
+$('btnStop').onclick = () => cmdNow('X');
+$('btnNow').onclick = () => cmdNow('!');
+$('hStop').onclick = () => cmdNow('!');
+const trim = d => {
+  if (!remoteOk()) return toast('Remote control is switched off on the machine\'s screen.', true);
+  if (S.state === 'run' || S.state === 'measure') { log(d > 0 ? '+' : '-', 'tx'); S.link.send(frame(d > 0 ? '+' : '-')); return; }
+  const cur = S.cfg ? S.cfg.O : 0; cmd('O' + Math.max(-500, Math.min(500, cur + 10 * d)));
+};
+$('btnOp').onclick = () => trim(1); $('btnOm').onclick = () => trim(-1);
+$('btnSetCount').onclick = () => {
+  const v = $('setCount').value.trim(), n = Math.round(+v);
+  if (v === '' || !(n >= 0 && n <= 99999999)) return toast('The count must be a whole number from 0 to 99,999,999.', true);
+  control('N' + n); $('setCount').value = '';
+};
+$('btnResetCount').onclick = () => { if (S.made === 0 || confirm('Reset the piece count from ' + fmtN(S.made) + ' to 0?')) control('N0'); };
+// tests
+$('tF1').onclick = () => control('F');
+$('tC').onclick = () => control('C');
+$('tR').onclick = () => control('R');
+$('tFn').onclick = () => { const n = Math.round(+$('nFeed').value); if (n >= 1 && n <= 60000) control('F' + n); else toast('Pieces to feed: 1 to 60000.', true); };
+const jog = s => { const d = Math.round(+$('jogMm').value); if (d >= 1 && d <= 500) control('J' + s * d); else toast('Jog: 1 to 500 mm.', true); };
+$('tJf').onclick = () => jog(1); $('tJb').onclick = () => jog(-1);
+$('tK').onclick = () => control('K');
+$('tH').onclick = () => control('H');
+$('tW').onclick = () => control('W');
+
+// ============================================================ Wi-Fi page
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const bars = r => { const n = r >= -55 ? 4 : r >= -65 ? 3 : r >= -75 ? 2 : r >= -85 ? 1 : 0; return '<span class="bars">' + [0, 1, 2, 3].map(i => '<i' + (i < n ? ' class="on"' : '') + '></i>').join('') + '</span>'; };
+function modSend(line) { if (!S.up || !S.link || S.link.kind === 'usb') return toast('Connect over Wi-Fi or the cloud for this.', true); S.link.send(line); }
+function renderWifi() {
+  const w = S.wifi, l = S.saved;
+  const rows = [];
+  if (w) {
+    rows.push(['Wi-Fi', w.st === 2 ? bars(w.rssi) + esc(w.ssid) + ' <span class="muted">(' + w.rssi + ' dBm)</span>' : w.st === 3 ? 'setup hotspot <b>StripCutter-Setup</b>' : 'looking for a saved network']);
+    if (w.st === 2) rows.push(['Address', esc(w.ip) + ' · <a href="http://' + esc(w.name) + '.local/" target="_blank" rel="noopener">' + esc(w.name) + '.local</a>']);
+    if (w.ap) rows.push(['Hotspot', 'on' + (w.apc ? ', ' + w.apc + ' device' + (w.apc > 1 ? 's' : '') : '') + ' · 192.168.4.1']);
+    rows.push(['Cloud', w.cloud === 2 ? '<span style="color:var(--golite)">online</span>' : w.cloud === 1 ? '<span style="color:var(--amber)">' + esc(w.cerr || 'connecting') + '</span>' : 'off']);
+    rows.push(['Machine ID', '<span class="mono">' + esc(w.cid) + '</span>']);
+    rows.push(['Controller', w.avr < 0 ? '<span style="color:var(--redlite)">no answer: check DIP 1 and 2 ON</span>' : w.avr < 90 ? 'answering' : 'quiet for ' + w.avr + ' s']);
+    rows.push(['Module', 'v' + esc(w.ver) + ' · up ' + fmtUp(w.up) + (w.heap ? ' · free memory ' + Math.round(w.heap / 1024) + ' KB' : '')]);
+  } else rows.push(['Status', S.up ? 'waiting for the Wi-Fi module…' : 'not connected']);
+  $('wfStatus').innerHTML = rows.map(([k, v]) => '<dt>' + k + '</dt><dd>' + v + '</dd>').join('');
+  const ul = $('wfSaved');
+  if (l) {
+    $('wfCount').textContent = l.nets.length + ' of ' + l.max;
+    ul.innerHTML = l.nets.length ? l.nets.map(n => '<li><span class="nm">' + esc(n) + '</span>' + (w && w.st === 2 && w.ssid === n ? '<span class="tag g">connected</span>' : '') + '<button class="btn sm warn" data-del="' + esc(n) + '">Remove</button></li>').join('') : '<li class="muted">None yet. Find networks and add one.</li>';
+  }
+  if (w && w.st === 2) $('otaNote').textContent = 'Wi-Fi module update over Wi-Fi: Arduino IDE → Tools → Port → network port "' + w.name + '" (machine password), while the machine is idle.';
+  const cid = w && w.cid || (l && l.cid);
+  $('clInfo').textContent = cid ? 'Machine ID: ' + cid + '. Saving here also sets up this phone or PC for the cloud.' : '';
+  if (l && l.keyDefault) banner('cloud', 'The machine still uses the factory password "stripcutter". Change it on the Wi-Fi page before using the cloud.', 'info');
+}
+const fmtUp = s => s < 120 ? s + ' s' : s < 7200 ? Math.round(s / 60) + ' min' : s < 172800 ? Math.round(s / 3600) + ' h' : Math.round(s / 86400) + ' days';
+function renderScan() {
+  const ul = $('wfScanList'), list = S.scan || [];
+  ul.innerHTML = list.length ? list.map((n, i) => '<li data-i="' + i + '">' + bars(n.r) + '<span class="nm">' + esc(n.s) + '</span>' + (n.k ? '<span class="tag g">saved</span>' : '') + (n.e ? '' : '<span class="tag">open</span>') + '</li>').join('') : '<li class="muted">No networks found.</li>';
+}
+function fillWifiForms() {
+  const l = S.saved; if (!l) return;
+  if (document.activeElement !== $('mnName')) $('mnName').value = l.name;
+  const c = l.cloud;
+  if (!$('clHost').matches(':focus')) {
+    $('clOn').checked = !!c.on; $('clVerify').checked = !!c.verify; $('clHost').value = c.host; $('clPort').value = c.port; $('clUser').value = c.user;
+    $('clPass').placeholder = c.hasPass ? 'saved (leave empty to keep)' : '';
+  }
+}
+$('wfSaved').onclick = e => { const n = e.target.dataset && e.target.dataset.del; if (n !== undefined && confirm('Remove "' + n + '" from the saved networks?')) modSend('$DEL\t' + n); };
+$('wfScanList').onclick = e => { const li = e.target.closest('li[data-i]'); if (!li) return; const n = S.scan[+li.dataset.i]; $('wfAdd').hidden = false; $('wfSsid').value = n.s; $('wfPass').value = ''; $('wfPass').focus(); };
+$('wfManual').onclick = () => { $('wfAdd').hidden = false; $('wfSsid').value = ''; $('wfSsid').focus(); };
+$('wfCancel').onclick = () => { $('wfAdd').hidden = true; };
+$('wfSave').onclick = () => {
+  const s = $('wfSsid').value, p = $('wfPass').value;
+  if (!s || s.length > 32) return toast('Network name: 1 to 32 characters.', true);
+  if (p && (p.length < 8 || p.length > 64)) return toast('A Wi-Fi password is 8 to 64 characters.', true);
+  if (/\t|\n/.test(s + p)) return toast('No tabs or line breaks, please.', true);
+  modSend('$ADD\t' + s + '\t' + p); $('wfAdd').hidden = true; $('wfPass').value = '';
+};
+$('wfScan').onclick = () => { $('wfScan').disabled = true; $('wfScanList').innerHTML = '<li class="muted">Looking…</li>'; modSend('$SCAN'); setTimeout(() => { $('wfScan').disabled = false; }, 8000); };
+$('wfJoin').onclick = () => modSend('$JOIN');
+$('wfRefresh').onclick = () => { modSend('$W'); modSend('$L'); };
+$('wfAp').onclick = () => { if (confirm('Open the setup hotspot "StripCutter-Setup" for 10 minutes?')) modSend('$AP'); };
+$('wfRestart').onclick = () => { if (confirm('Restart the Wi-Fi module? The machine keeps running; the app reconnects in a few seconds.')) modSend('$RESTART'); };
+$('mnSave').onclick = () => {
+  const n = $('mnName').value.trim().toLowerCase();
+  if (!/^[a-z0-9]([a-z0-9-]{0,22}[a-z0-9])?$/.test(n)) return toast('Name: 1 to 24 of a-z, 0-9 and -, not starting or ending with -.', true);
+  if (confirm('Rename the machine to "' + n + '"? The address becomes http://' + n + '.local and the machine ID changes, so cloud users must update it.')) modSend('$NAME\t' + n);
+};
+$('pwSave').onclick = () => {
+  const o = $('pwOld').value, n = $('pwNew').value;
+  if (n.length < 8 || n.length > 32 || /[^\x21-\x7e]/.test(n)) return toast('New password: 8 to 32 letters, digits or signs, no spaces.', true);
+  modSend('$KEY\t' + o + '\t' + n);
+  S.pendingKey = n;                      // kept once the machine says it changed
+  $('pwOld').value = $('pwNew').value = '';
+};
+$('clSave').onclick = () => {
+  const host = $('clHost').value.trim().replace(/^[a-z]+:\/\//, '').replace(/[:/].*$/, ''), port = Math.round(+$('clPort').value) || 8883, user = $('clUser').value.trim(), pass = $('clPass').value;
+  const on = $('clOn').checked;
+  if (on && !host) return toast('Enter the cloud server name.', true);
+  if (/\t|\n/.test(host + user + pass)) return toast('No tabs or line breaks, please.', true);
+  modSend('$CLOUD\t' + (on ? 1 : 0) + '\t' + ($('clVerify').checked ? 1 : 0) + '\t' + host + '\t' + port + '\t' + user + '\t' + (pass || '*'));
+  const cid = (S.wifi && S.wifi.cid) || (S.saved && S.saved.cid);
+  if (on && host && cid) {
+    const old = store.get('cloud', {}) || {};
+    const c = { url: 'wss://' + host + ':' + (Math.round(+$('clWsPort').value) || 8884) + '/mqtt', user, pass: pass || old.pass || '', id: cid };
+    store.set('cloud', c); fillCloudForm();
+  }
+  $('clPass').value = '';
+};
+$('clLink').onclick = () => {
+  const c = store.get('cloud', null);
+  if (!c || !c.url) return toast('Save the cloud settings first.', true);
+  const data = btoa(unescape(encodeURIComponent(JSON.stringify({ u: c.url, n: c.user, i: c.id }))));
+  // a page from the machine or a file on the PC can't be opened elsewhere: point the link at the online copy
+  const base = location.protocol === 'https:' ? location.origin + location.pathname : ONLINE_APP;
+  const text = base + '#setup=' + data;
+  (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).then(() => toast('Copied. The other device still needs the cloud password and the machine password.'), () => prompt('Copy this:', text));
+};
+
+// ============================================================ connect page
+function fillCloudForm() { const c = store.get('cloud', {}) || {}; $('cUrl').value = c.url || ''; $('cUser').value = c.user || ''; $('cPass').value = c.pass || ''; $('cId').value = c.id || ''; }
+$('btnWifi').onclick = () => {
+  let h = $('wAddr').value.trim() || (FROM_MACHINE ? location.hostname : 'stripcutter.local');
+  store.set('wifiHost', h);
+  useLink(new WifiLink(h));
+};
+$('btnCloud').onclick = () => {
+  const c = { url: $('cUrl').value.trim(), user: $('cUser').value.trim(), pass: $('cPass').value, id: $('cId').value.trim() };
+  if (!/^wss?:\/\//.test(c.url)) return toast('The cloud address starts with wss:// (for HiveMQ Cloud: wss://<cluster>:8884/mqtt).', true);
+  if (!c.id) return toast('Enter the machine ID (shown on the Wi-Fi page when connected locally).', true);
+  store.set('cloud', c);
+  useLink(new CloudLink(c));
+};
+async function usbConnect(port) { useLink(new UsbLink(port)); }
+$('btnUsb').onclick = async () => {
+  if (!('serial' in navigator)) return toast('This browser cannot use USB ports. Use Edge or Chrome on a PC.', true);
+  try { const port = await navigator.serial.requestPort(); usbConnect(port); } catch (e) { if (e.name !== 'NotFoundError') toast('Could not open the port: ' + e.message, true); }
+};
+$('chip').onclick = () => { showPage('pgConnect'); };
+
+function setupConnectPage() {
+  $('wAddr').value = store.get('wifiHost', FROM_MACHINE ? location.hostname : '') || '';
+  fillCloudForm();
+  if (SECURE_PAGE) { $('btnWifi').disabled = true; $('wifiNote').textContent = 'This page is opened over https, which may not talk to the machine directly. Open http://stripcutter.local (or the address on the machine\'s screen) instead.'; }
+  if (!('serial' in navigator)) { $('btnUsb').disabled = true; $('usbNote').textContent = FROM_MACHINE ? 'USB needs the app file opened on the PC (Edge or Chrome), not this page from the machine.' : 'This browser cannot use USB ports. Use Edge or Chrome on a PC.'; }
+  const m = location.hash.match(/setup=([A-Za-z0-9+/=]+)/);
+  if (m) { try { const d = JSON.parse(decodeURIComponent(escape(atob(m[1])))); const c = store.get('cloud', {}) || {}; store.set('cloud', { url: d.u, user: d.n, id: d.i, pass: c.url === d.u ? c.pass : '' }); fillCloudForm(); toast('Cloud details filled in. Enter the cloud password, then connect.'); history.replaceState(null, '', location.pathname + location.search); return 'setup'; } catch (e) {} }
+  return '';
+}
+
+// ============================================================ pages, log, keys
+function showPage(p) { const was = S.page; S.page = p; for (const s of document.querySelectorAll('.page')) s.classList.toggle('on', s.id === p); if (was !== p) window.scrollTo(0, 0); render(); if (p === 'pgWifi' && S.up && S.link.kind !== 'usb' && !S.saved) modSend('$L'); }
+$('tabs').onclick = e => { const b = e.target.closest('button[data-p]'); if (b) showPage(b.dataset.p); };
+$('optRaw').onchange = () => { $('log').textContent = ''; for (const l of logLines.slice(-400)) { const st = l[0] === '#'; if (st && !$('optRaw').checked) continue; const d = document.createElement('div'); d.textContent = l; d.className = st ? 'st' : l.startsWith('> ') ? 'tx' : ''; $('log').appendChild(d); } $('log').scrollTop = $('log').scrollHeight; };
+$('btnClear').onclick = () => { $('log').textContent = ''; logLines.length = 0; };
+$('btnSave').onclick = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([logLines.join('\r\n')], { type: 'text/plain' })); a.download = 'strip_cutter_log.txt'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); };
+const sendTyped = () => {
+  const v = $('cmd').value.trim(); if (!v) return;
+  if (v[0] === '$') modSend(v);
+  else if (busy()) { if (/^[xX+\-!]$/.test(v)) cmdNow(v.toUpperCase()); else return toast('While the machine is busy only X, +, - and ! work.', true); }
+  else cmd(v);
+  $('cmd').value = '';
+};
+$('btnSend').onclick = sendTyped;
+$('cmd').addEventListener('keydown', e => { if (e.key === 'Enter') sendTyped(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && S.up && busy() && !$('dlgKey').open) { e.preventDefault(); cmdNow('!'); } });
+window.addEventListener('beforeunload', e => { if (S.up && busy() && S.link && S.link.kind === 'usb') { e.preventDefault(); e.returnValue = ''; } });
+setInterval(() => {
+  if (S.up) renderTiming();
+  if (S.up && S.link.kind === 'cloud' && S.link.stateAt && Date.now() - S.link.stateAt > 150000) S.link.machineOnline = false;
+}, 1000);
+$('optHold').checked = store.get('hold', true);
+$('optHold').onchange = () => store.set('hold', $('optHold').checked);
+
+// USB: connect by itself to a port used before
+if ('serial' in navigator) {
+  navigator.serial.addEventListener('connect', () => { if (store.get('last', '') === 'usb' && !S.link) setTimeout(autoUsb, 700); });
+  navigator.serial.addEventListener('disconnect', ev => { if (S.link && S.link.kind === 'usb' && ev.target === S.link.port) { S.link.close(); linkDown('The USB cable was unplugged.'); } });
+}
+async function autoUsb() { try { const ports = await navigator.serial.getPorts(); if (ports.length && !S.link) usbConnect(ports[0]); } catch (e) {} }
+
+// ============================================================ start
+const how = setupConnectPage();
+showPage('pgConnect');
+if (how !== 'setup') {
+  const last = store.get('last', '');
+  if (FROM_MACHINE) useLink(new WifiLink(location.hostname));
+  else if (last === 'cloud' && (store.get('cloud', {}) || {}).url) useLink(new CloudLink(store.get('cloud')));
+  else if (last === 'wifi' && store.get('wifiHost', '') && !SECURE_PAGE) useLink(new WifiLink(store.get('wifiHost')));
+  else if (last === 'usb') autoUsb();
+}
+render();
+window.__sc = { S, frame, hmac32, sha256 };     // for tests
+})();
+</script>
+</body>
+</html>
