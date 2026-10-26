@@ -27,7 +27,7 @@
 #include <ctype.h>
 #include <stdarg.h>
 
-#define ESP_VERSION "1.1"
+#define ESP_VERSION "1.2"
 #define MAX_NETS 8
 #define MAX_WS 5                     // WebSocket clients (the library's limit on the ESP8266)
 #define CLOUD_ID 9                   // client number used for the cloud link
@@ -65,7 +65,7 @@ struct NetState {                    // filled in by the sketch
   char chip[7];                      // chip id, 6 hex digits
 };
 
-struct ScanItem { char ssid[33]; int8_t rssi; uint8_t enc, ch; uint8_t bssid[6]; };
+struct ScanItem { char ssid[33]; int8_t rssi; uint8_t enc, ch; uint8_t bssid[6]; uint8_t sec; };   // sec: ESP8266 ENC_TYPE_*, 255 = unknown (WPA3 / enterprise)
 
 extern EspCfg cfg;
 extern NetState net;
@@ -210,7 +210,7 @@ static uint32_t failUntil[MAX_NETS];
 enum { R_NONE, R_OK, R_PASS, R_NOTSEEN, R_NOANSWER, R_REFUSED, R_NOIP, R_LOST, R_NEEDPASS, R_FAIL };
 enum { P_DOWN, P_SCAN, P_JOIN, P_UP };
 #define NSEENLIST 8
-struct SeenNet { char ssid[21]; int8_t rssi; uint8_t enc, saved; };
+struct SeenNet { char ssid[21]; int8_t rssi; uint8_t enc, saved, ch, sec; };
 struct WifiDiag {
   uint8_t phase, ch;                       // P_DOWN .. P_UP, radio channel while connected
   int8_t joinNet;                          // saved network being joined or in use (-1 none)
@@ -218,6 +218,7 @@ struct WifiDiag {
   uint32_t scanAt; uint8_t scanCount, nSeen; // last scan: when, how many access points
   SeenNet seen[NSEENLIST];                 // the strongest names in the last scan
   int8_t rssi[MAX_NETS]; uint8_t inScan[MAX_NETS], res[MAX_NETS], enc[MAX_NETS];   // per saved network
+  uint16_t tries; uint8_t lastSt, lastEv, lastApOn;  // raw facts about the last join: Wi-Fi status, radio events, hotspot on
 };
 static WifiDiag wd;
 
@@ -384,6 +385,7 @@ void coreDiagScan(const ScanItem *it, int n, int total) {
     const ScanItem &s = it[order[j]];
     strncpy(wd.seen[j].ssid, s.ssid, 20); wd.seen[j].ssid[20] = 0;
     wd.seen[j].rssi = s.rssi; wd.seen[j].enc = s.enc; wd.seen[j].saved = findNet(s.ssid) >= 0;
+    wd.seen[j].ch = s.ch; wd.seen[j].sec = s.sec;
   }
 }
 void coreDiagJoin(int k) { wd.joinNet = (int8_t)k; }
@@ -530,12 +532,15 @@ static void dWrap(char (*rows)[DIAG_W + 2], uint8_t r, uint8_t lines, char colou
   }
 }
 // what a failed join means, in three short rows: title, hint, hint
-static void resText(uint8_t res, const char **t, const char **h1, const char **h2) {
+static void resText(uint8_t res, int rssi, const char **t, const char **h1, const char **h2) {
   *h1 = ""; *h2 = "";
   switch (res) {
     case R_PASS:     *t = "Password refused";          *h1 = "Check the password and";    *h2 = "that the router uses WPA2."; break;
     case R_NOTSEEN:  *t = "Network not found";         *h1 = "Too far, hidden, or 5 GHz"; *h2 = "only. It needs 2.4 GHz.";    break;
-    case R_NOANSWER: *t = "No answer from the router"; *h1 = "Weak signal or a busy";     *h2 = "router. Move closer.";        break;
+    case R_NOANSWER: *t = "No answer from the router";
+      if (rssi && rssi >= -67) { *h1 = "Signal is fine: check the"; *h2 = "router is WPA2, not WPA3."; }
+      else { *h1 = "Weak signal or a busy"; *h2 = "router. Move closer."; }
+      break;
     case R_REFUSED:  *t = "Router refused the join";   *h1 = "MAC filter, router full or"; *h2 = "WPA3-only. Check router.";  break;
     case R_NOIP:     *t = "Joined, but got no IP";     *h1 = "The router gave no address"; *h2 = "(DHCP). Restart router."; break;
     case R_LOST:     *t = "Connection lost";           *h1 = "Signal too weak here, or";  *h2 = "the router restarted.";       break;
@@ -582,7 +587,7 @@ static void diagPage0(char (*rows)[DIAG_W + 2]) {          // now: state, addres
     } else if (wd.lastNet >= 0 && wd.lastNet < cfg.nNets && wd.lastRes != R_OK && wd.lastRes != R_NONE) {
       shortName(nm, cfg.nets[wd.lastNet].ssid, 16);
       dRow(rows, 3, DC_TEXT, "Last try: %s", nm);
-      resText(wd.lastRes, &t, &h1, &h2);
+      resText(wd.lastRes, wd.rssi[wd.lastNet], &t, &h1, &h2);
       if (wd.lastRes == R_FAIL && wd.lastCode) dRow(rows, 4, DC_RED, "%s (code %u)", t, wd.lastCode);
       else dRow(rows, 4, DC_RED, "%s", t);
       dRow(rows, 5, DC_DIM, "%s", h1);
@@ -594,7 +599,10 @@ static void diagPage0(char (*rows)[DIAG_W + 2]) {          // now: state, addres
     if (wd.scanAt) dRow(rows, 7, DC_DIM, "Heard %u nets, %s ago", wd.scanCount, ago(ag, wd.scanAt));
     else dRow(rows, 7, DC_DIM, "No scan yet");
   }
-  if (wd.phase != P_UP) dRow(rows, 8, DC_DIM, (cfg.cloudOn && cfg.cloudHost[0]) ? "Cloud: waits for Wi-Fi" : "Cloud: off");
+  if (wd.phase != P_UP) {                   // raw facts for fault finding: try number, radio code, status, events
+    if (wd.tries) dRow(rows, 8, DC_DIM, "#%u code %u st %u ev %u%s", wd.tries, wd.lastCode, wd.lastSt, wd.lastEv, wd.lastApOn ? " AP" : "");
+    else dRow(rows, 8, DC_DIM, (cfg.cloudOn && cfg.cloudHost[0]) ? "Cloud: waits for Wi-Fi" : "Cloud: off");
+  }
   unsigned long up = now / 60000;
   dRow(rows, 9, DC_DIM, "Wi-Fi module " ESP_VERSION ", up %luh%02lum", up / 60, up % 60);
 }
@@ -635,11 +643,12 @@ static void diagPage2(char (*rows)[DIAG_W + 2]) {          // what the module he
   else { char ag[8]; dRow(rows, 0, DC_TEXT, "In range: %u, %s ago", wd.scanCount, ago(ag, wd.scanAt)); }
   if (wd.scanAt && !wd.nSeen) { dRow(rows, 2, DC_AMBER, "No 2.4 GHz network heard."); }
   for (uint8_t j = 0; j < wd.nSeen; j++) {
-    char nm[16]; shortName(nm, wd.seen[j].ssid, 15);
-    dRow(rows, 1 + j, wd.seen[j].saved ? DC_GREEN : DC_TEXT, "%-15s %4d %s", nm, wd.seen[j].rssi,
-         wd.seen[j].saved ? "saved" : (wd.seen[j].enc ? "" : "open"));
+    char nm[13]; shortName(nm, wd.seen[j].ssid, 12);
+    uint8_t s = wd.seen[j].sec;              // ESP8266 ENC_TYPE: 2 WPA, 4 WPA2, 5 WEP, 7 open, 8 WPA/WPA2
+    const char *sec = s == 4 ? "WPA2" : s == 8 ? "WPA+2" : s == 2 ? "WPA" : s == 5 ? "WEP" : s == 7 ? "open" : "WPA3?";
+    dRow(rows, 1 + j, wd.seen[j].saved ? DC_GREEN : DC_TEXT, "%-12s %4d %2u %s", nm, wd.seen[j].rssi, wd.seen[j].ch, sec);
   }
-  dRow(rows, 9, DC_DIM, "Only 2.4 GHz. OK = scan");
+  dRow(rows, 9, DC_DIM, "2.4 GHz only. dBm ch sec");
 }
 
 static void diagSend(uint8_t page, bool full) {
