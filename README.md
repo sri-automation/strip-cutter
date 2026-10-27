@@ -48,6 +48,7 @@ A bench machine that feeds red packaging net (12 × 2.7 mm) and cuts it into pie
 | [README_feeder_v7.md](README_feeder_v7.md) | Feeder v7: stronger pinch arm, and an exit guide that clears the top roller and the blade |
 | [README_electronics_v5.html](https://sri-automation.github.io/strip-cutter/README_electronics_v5.html) | Electronics v5: screen, buttons, Wi-Fi, app, cloud |
 | `print_STL_hmi_panel_v1/`, `print_STL_hmi_panel_v2/` | Front panel fit checks. v2 has the arrow-key layout, and the screen is held by four M3 screws through its corner holes |
+| [README_hmi_enclosure_v1.md](README_hmi_enclosure_v1.md) | HMI enclosure v1: 150 mm sloped stand for the v2 front panel (60° face), with a foot screwed to the wood and wiring paths |
 
 ## Loading the firmware (short version)
 
