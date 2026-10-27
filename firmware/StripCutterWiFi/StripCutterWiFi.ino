@@ -359,28 +359,32 @@ void wifiTick() {
   if (scanning) {
     int n = WiFi.scanComplete();
     if (n >= 0 || n == WIFI_SCAN_FAILED) scanFinished(n);
-    else if (now - scanStartedAt > 30000) {              // the scan never reported back
+    else if ((int32_t)(now - scanStartedAt) > 30000) {   // the scan never reported back
       WiFi.scanDelete(); scanning = false; scanWhy = 0; wNext = now + 2000;
       if (++scanStuck >= 2 && coreMachineIdle()) restartAt = now + 500;   // Wi-Fi stuck: restart this module (the machine is not affected)
     }
   }
   switch (wst) {
     case W_DOWN:
-      if (!apOn && !scanning && (cfg.nNets == 0 || now - wDownSince > 30000)) apStart(0, false);
+      if (!apOn && !scanning && (cfg.nNets == 0 || (int32_t)(now - wDownSince) > 30000)) apStart(0, false);
       if (!scanning && cfg.nNets && (int32_t)(now - wNext) >= 0) startScan(1);
       break;
     case W_JOINING: {
       wl_status_t s = WiFi.status();
-      bool timedOut = now - wJoinStart > 20000;
+      // time since the join began, read fresh: the join may have been started a moment ago in this very
+      // call (after "now" was read), and "now - wJoinStart" would then be a huge number. That made every
+      // join "time out" at once, from version 1.0 on - the reason the machine never joined.
+      uint32_t el = millis() - wJoinStart;
+      bool timedOut = el > 20000;
       static int logSt = -1; static uint8_t logEv = 0; static bool logAssoc = false;
-      if (now - wJoinStart < 50) { logSt = -1; logEv = 0; logAssoc = false; }
-      if ((int)s != logSt) { wlog("  status %d after %lu ms", (int)s, now - wJoinStart); logSt = s; }
+      if (el < 50) { logSt = -1; logEv = 0; logAssoc = false; }
+      if ((int)s != logSt) { wlog("  status %d after %lu ms", (int)s, el); logSt = s; }
       if (discCount != logEv) { wlog("  radio: dropped, reason %u (event %u)", discReason, discCount); logEv = discCount; }
       if (assoc && !logAssoc) { wlog("  radio: associated with the router, waiting for an address"); logAssoc = true; }
       if (up) onUp();
       else if (timedOut || s == WL_CONNECT_FAILED || s == WL_WRONG_PASSWORD) {
         wd.lastSt = (uint8_t)s; wd.lastEv = discCount;
-        wlog("join FAILED after %lu ms: status %d, %u radio events, last reason %u, associated %s", now - wJoinStart, (int)s, discCount, discReason, assoc ? "yes" : "no");
+        wlog("join FAILED after %lu ms: status %d, %u radio events, last reason %u, associated %s", el, (int)s, discCount, discReason, assoc ? "yes" : "no");
         coreDiagResult(wNet, joinResult(s, timedOut), discReason);
         coreNetFailed(wNet); WiFi.disconnect(); wst = W_DOWN; wNext = now + 500;
         if (apPaused) { apPaused = false; apStart(0, false); }   // the hotspot comes back at once
