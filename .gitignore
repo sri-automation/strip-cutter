@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 .DS_Store
 Thumbs.db
+
+# per-machine settings (Wi-Fi name and password): never on GitHub
+firmware/StripCutterWiFi/wifi_local.h

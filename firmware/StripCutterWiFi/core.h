@@ -27,7 +27,7 @@
 #include <ctype.h>
 #include <stdarg.h>
 
-#define ESP_VERSION "1.3"
+#define ESP_VERSION "1.4"
 #define MAX_NETS 8
 #define MAX_WS 5                     // WebSocket clients (the library's limit on the ESP8266)
 #define CLOUD_ID 9                   // client number used for the cloud link

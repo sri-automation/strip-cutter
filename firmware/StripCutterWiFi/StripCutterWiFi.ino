@@ -49,6 +49,13 @@
 #include "core.h"
 #include "certs.h"
 #include "app_gz.h"
+#include <stdarg.h>
+#if __has_include("wifi_local.h")
+#include "wifi_local.h"                  // this machine's own settings (not on GitHub), see wifi_local.example.h
+#endif
+#ifndef WIFI_LOG
+#define WIFI_LOG 0
+#endif
 
 EspCfg cfg;
 NetState net;
@@ -80,6 +87,18 @@ const IPAddress AP_IP(192, 168, 4, 1);
 char topicIn[80], topicOut[80], topicState[80], topicOnline[80];
 
 bool mqttUp() { return mqtt && mqtt->connected(); }
+
+// ---------------- Wi-Fi log for fault finding (WIFI_LOG 1 in wifi_local.h) ----------------
+// Lines start with "~" so the ATmega ignores them if they reach it. Read them with DIP 5 + 6 ON
+// (7 OFF) and the Serial Monitor at 115200. The log stops once the machine is on Wi-Fi, after
+// 10 minutes, and whenever the machine runs (so it can never crowd a stop line).
+bool logOn() { return WIFI_LOG && millis() < 600000UL && coreMachineIdle(); }
+void wlog(const char *fmt, ...) {
+  if (!logOn()) return;
+  char b[180];
+  va_list ap; va_start(ap, fmt); vsnprintf(b, sizeof(b), fmt, ap); va_end(ap);
+  Serial.printf("~ %7.1f s  %s\n", millis() / 1000.0, b);
+}
 
 // ---------------- glue for core.h ----------------
 uint32_t hwMillis() { return millis(); }
@@ -175,6 +194,7 @@ void netShow() {                         // what the ATmega's screen and the app
 // the hotspot is switched only between scans (changing the Wi-Fi mode during a scan can lose it)
 void apStart(uint32_t minutes, bool manual) {
   if (!apOn) {
+    wlog("setup hotspot ON (%s)", manual ? "opened by hand" : "not connected");
     WiFi.mode(WIFI_AP_STA);
     WiFi.softAPConfig(AP_IP, AP_IP, IPAddress(255, 255, 255, 0));
     WiFi.softAP(AP_NAME, cfg.key);
@@ -189,6 +209,7 @@ void apStart(uint32_t minutes, bool manual) {
 
 void apStop() {
   if (!apOn) return;
+  wlog("setup hotspot off");
   dns.stop();
   WiFi.softAPdisconnect(true);
   WiFi.mode(WIFI_STA);
@@ -200,7 +221,8 @@ void startScan(uint8_t why) {
   scanWhy |= why;
   if (scanning) return;
   WiFi.scanDelete();
-  if (WiFi.scanNetworks(true, false) == WIFI_SCAN_FAILED) { scanWhy = 0; wNext = millis() + 5000; return; }
+  if (WiFi.scanNetworks(true, false) == WIFI_SCAN_FAILED) { wlog("scan could not start"); scanWhy = 0; wNext = millis() + 5000; return; }
+  wlog("scan started (%s)", why & 1 ? "to join" : why & 2 ? "roam check" : "asked for");
   scanning = true; scanStartedAt = millis();
 }
 
@@ -212,19 +234,24 @@ void beginJoin(int k, const ScanItem &it, bool roam) {
   discReason = 0; discCount = 0; assoc = false; joinEnc = it.enc;
   coreDiagJoin(k);
   wd.tries++; wd.lastApOn = apOn;
-  if (roam) WiFi.begin(cfg.nets[k].ssid, cfg.nets[k].pass, 0, it.bssid, true);
-  else WiFi.begin(cfg.nets[k].ssid, cfg.nets[k].pass);
+  wlog("join \"%s\" (password %u characters)%s, signal %d dBm, channel %u, hotspot %s",
+       cfg.nets[k].ssid, (unsigned)strlen(cfg.nets[k].pass), roam ? " to a stronger access point" : "", it.rssi, it.ch, apOn ? "ON" : "off");
+  wl_status_t b;
+  if (roam) b = WiFi.begin(cfg.nets[k].ssid, cfg.nets[k].pass, 0, it.bssid, true);
+  else b = WiFi.begin(cfg.nets[k].ssid, cfg.nets[k].pass);
+  wlog("begin() said status %d, auto-reconnect %s", (int)b, WiFi.getAutoReconnect() ? "on" : "off");
   wst = W_JOINING; wNet = k; wJoinStart = millis();
 }
 
 void apPause() {                         // hotspot off for one join try (nobody is on it)
+  wlog("setup hotspot off for this join try");
   dns.stop(); WiFi.softAPdisconnect(true); WiFi.mode(WIFI_STA);
   apOn = false; apPaused = true; apOffAt = 0;
 }
 
 void joinBest(const ScanItem *items, int n) {
   int k, i = corePickNet(items, n, &k);
-  if (i < 0) { wNext = millis() + (apOn && net.apClients ? 60000 : 15000); return; }
+  if (i < 0) { wlog("no saved network to try now (none heard, or all failed in the last minute)"); wNext = millis() + (apOn && net.apClients ? 60000 : 15000); return; }
   apHadPhone = apOn && net.apClients > 0;
   if (apOn) apPause();                   // back on at once if the join fails
   WiFi.disconnect();
@@ -256,6 +283,8 @@ uint8_t joinResult(wl_status_t s, bool timedOut) {
 
 void onUp() {
   wst = W_UP;
+  wlog("CONNECTED to \"%s\" after %lu ms: IP %s, %d dBm, channel %d", WiFi.SSID().c_str(), millis() - wJoinStart,
+       WiFi.localIP().toString().c_str(), WiFi.RSSI(), WiFi.channel());
   WiFi.setSleepMode(WIFI_NONE_SLEEP);    // quick answers from now on (the join itself ran with the default, as the test)
   if (apPaused && apHadPhone) apStart(3, false);   // a phone was on the hotspot: 3 minutes so it can read the new address
   apPaused = false;
@@ -303,6 +332,11 @@ void scanFinished(int n) {
   }
   WiFi.scanDelete();
   if (items) coreDiagScan(items, k, total);
+  if (logOn()) {
+    wlog("scan done: %d access points heard", total);
+    for (int j = 0; j < k; j++)
+      if (findNet(items[j].ssid) >= 0) wlog("  saved \"%s\": %d dBm, channel %u, security %u", items[j].ssid, items[j].rssi, items[j].ch, items[j].sec);
+  }
   scanning = false; scanStuck = 0;
   uint8_t why = scanWhy; scanWhy = 0;
   if (!items) { wNext = millis() + 5000; return; }       // out of memory: try again later
@@ -338,9 +372,15 @@ void wifiTick() {
     case W_JOINING: {
       wl_status_t s = WiFi.status();
       bool timedOut = now - wJoinStart > 20000;
+      static int logSt = -1; static uint8_t logEv = 0; static bool logAssoc = false;
+      if (now - wJoinStart < 50) { logSt = -1; logEv = 0; logAssoc = false; }
+      if ((int)s != logSt) { wlog("  status %d after %lu ms", (int)s, now - wJoinStart); logSt = s; }
+      if (discCount != logEv) { wlog("  radio: dropped, reason %u (event %u)", discReason, discCount); logEv = discCount; }
+      if (assoc && !logAssoc) { wlog("  radio: associated with the router, waiting for an address"); logAssoc = true; }
       if (up) onUp();
       else if (timedOut || s == WL_CONNECT_FAILED || s == WL_WRONG_PASSWORD) {
         wd.lastSt = (uint8_t)s; wd.lastEv = discCount;
+        wlog("join FAILED after %lu ms: status %d, %u radio events, last reason %u, associated %s", now - wJoinStart, (int)s, discCount, discReason, assoc ? "yes" : "no");
         coreDiagResult(wNet, joinResult(s, timedOut), discReason);
         coreNetFailed(wNet); WiFi.disconnect(); wst = W_DOWN; wNext = now + 500;
         if (apPaused) { apPaused = false; apStart(0, false); }   // the hotspot comes back at once
@@ -348,7 +388,7 @@ void wifiTick() {
       break;
     }
     case W_UP:
-      if (!up) { coreDiagResult(wNet, R_LOST, discReason); onDown(); }
+      if (!up) { wlog("connection lost, reason %u", discReason); coreDiagResult(wNet, R_LOST, discReason); onDown(); }
       else if ((int32_t)(now - roamNext) >= 0) {
         roamNext = now + 300000;
         if (WiFi.RSSI() < -70 && coreMachineIdle() && !scanning) startScan(2);
@@ -526,16 +566,32 @@ void setup() {
   EEPROM.begin(sizeof(EspCfg) + 8);
   EEPROM.get(0, cfg);
   if (!cfgValid(cfg)) { cfgDefaults(cfg); cfgStore(); }
+#ifdef DEFAULT_WIFI_NAME
+  {                                      // the network from wifi_local.h: always there, with its password
+    int k = findNet(DEFAULT_WIFI_NAME);
+    if (k < 0 && cfg.nNets < MAX_NETS) {
+      k = cfg.nNets++; memset(&cfg.nets[k], 0, sizeof(Net));
+      strncpy(cfg.nets[k].ssid, DEFAULT_WIFI_NAME, 32); cfg.nets[k].pass[0] = 1;   // (forces the store below)
+    }
+    if (k >= 0 && strcmp(cfg.nets[k].pass, DEFAULT_WIFI_PASS)) {
+      memset(cfg.nets[k].pass, 0, sizeof(cfg.nets[k].pass)); strncpy(cfg.nets[k].pass, DEFAULT_WIFI_PASS, 64); cfgStore();
+    }
+  }
+#endif
   memset(&net, 0, sizeof(net));
   snprintf(net.chip, sizeof(net.chip), "%06x", ESP.getChipId() & 0xFFFFFF);
 
   WiFi.persistent(false);
-  WiFi.setAutoReconnect(false);
+  WiFi.setAutoReconnect(true);           // as the WiFiTest sketch: the radio may retry by itself while it joins
   evDisc = WiFi.onStationModeDisconnected([](const WiFiEventStationModeDisconnected &e) { discReason = e.reason; if (discCount < 255) discCount++; });
   evConn = WiFi.onStationModeConnected([](const WiFiEventStationModeConnected &) { assoc = true; });
   WiFi.mode(WIFI_STA);
   WiFi.hostname(cfg.name);
   coreInit();                            // after the radio is on: its random numbers make the nonces
+  if (logOn()) {
+    wlog("Strip cutter Wi-Fi module " ESP_VERSION ", %u saved networks:", cfg.nNets);
+    for (uint8_t i = 0; i < cfg.nNets; i++) wlog("  \"%s\" (password %u characters)", cfg.nets[i].ssid, (unsigned)strlen(cfg.nets[i].pass));
+  }
   wDownSince = millis();
   netShow();
   if (cfg.nNets) startScan(1); else apStart(0, false);
@@ -558,6 +614,11 @@ void setup() {
 }
 
 void loop() {
+  if (WIFI_LOG) {                        // the Wi-Fi library's own messages too, while the log runs and until connected
+    static bool sdkLog = false;
+    bool want = logOn() && wst != W_UP;
+    if (want != sdkLog) { Serial.setDebugOutput(want); sdkLog = want; }
+  }
   for (int i = 0; i < 256 && Serial.available(); i++) coreAvrByte(Serial.read());
   wifiTick();
   if (apOn) dns.processNextRequest();
