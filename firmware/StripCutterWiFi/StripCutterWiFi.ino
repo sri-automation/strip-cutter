@@ -144,7 +144,7 @@ WiFiEventHandler evDisc, evConn;
 volatile uint16_t discReason = 0;
 volatile uint8_t discCount = 0;
 volatile bool assoc = false;
-bool apPaused = false;                   // the setup hotspot is off for this one join try
+bool apPaused = false, apHadPhone = false;   // the setup hotspot is off for this join try (and had a phone on it)
 bool joinEnc = false;                    // the network being joined is locked (needs a password)
 uint8_t wst = W_DOWN;
 int8_t wNet = -1;
@@ -204,9 +204,10 @@ void startScan(uint8_t why) {
   scanning = true; scanStartedAt = millis();
 }
 
-// A join is started by name and password only: the radio finds the network itself. (Giving it the
-// channel as well makes the ESP8266 switch channel just after it started connecting, which can stall
-// the join, most of all while the setup hotspot runs.) Only a roam names the access point (bssid).
+// A join is made the way the stand-alone WiFiTest sketch does it, which joins at once on the same
+// board: the setup hotspot off, a clean start, then network name and password only - the radio finds
+// the network itself. (With the hotspot running, and with the channel given, joins hung with no answer
+// from the router.) Only a roam names the access point (bssid).
 void beginJoin(int k, const ScanItem &it, bool roam) {
   discReason = 0; discCount = 0; assoc = false; joinEnc = it.enc;
   coreDiagJoin(k);
@@ -224,9 +225,10 @@ void apPause() {                         // hotspot off for one join try (nobody
 void joinBest(const ScanItem *items, int n) {
   int k, i = corePickNet(items, n, &k);
   if (i < 0) { wNext = millis() + (apOn && net.apClients ? 60000 : 15000); return; }
-  // every second try is made with the setup hotspot off, if no phone is on it and nobody opened it
-  // by hand: the radio then has one job only
-  if (apOn && !apManual && net.apClients == 0 && (wd.tries & 1)) apPause();
+  apHadPhone = apOn && net.apClients > 0;
+  if (apOn) apPause();                   // back on at once if the join fails
+  WiFi.disconnect();
+  delay(300);                            // as the test sketch: let the radio settle (the ATmega does not wait for us)
   beginJoin(k, items[i], false);
 }
 
@@ -254,7 +256,9 @@ uint8_t joinResult(wl_status_t s, bool timedOut) {
 
 void onUp() {
   wst = W_UP;
-  apPaused = false;                      // joined: the hotspot is not needed
+  WiFi.setSleepMode(WIFI_NONE_SLEEP);    // quick answers from now on (the join itself ran with the default, as the test)
+  if (apPaused && apHadPhone) apStart(3, false);   // a phone was on the hotspot: 3 minutes so it can read the new address
+  apPaused = false;
   coreNetOk(wNet);
   coreDiagJoin(wNet); coreDiagResult(wNet, R_OK, 0);
   roamNext = millis() + 300000;
@@ -333,7 +337,7 @@ void wifiTick() {
       break;
     case W_JOINING: {
       wl_status_t s = WiFi.status();
-      bool timedOut = now - wJoinStart > 15000;
+      bool timedOut = now - wJoinStart > 20000;
       if (up) onUp();
       else if (timedOut || s == WL_CONNECT_FAILED || s == WL_WRONG_PASSWORD) {
         wd.lastSt = (uint8_t)s; wd.lastEv = discCount;
@@ -530,12 +534,7 @@ void setup() {
   evDisc = WiFi.onStationModeDisconnected([](const WiFiEventStationModeDisconnected &e) { discReason = e.reason; if (discCount < 255) discCount++; });
   evConn = WiFi.onStationModeConnected([](const WiFiEventStationModeConnected &) { assoc = true; });
   WiFi.mode(WIFI_STA);
-  {                                      // channels 1 to 13 (India, Europe, most of Asia)
-    wifi_country_t c; strcpy(c.cc, "IN"); c.schan = 1; c.nchan = 13; c.policy = WIFI_COUNTRY_POLICY_MANUAL;
-    wifi_set_country(&c);
-  }
   WiFi.hostname(cfg.name);
-  WiFi.setSleepMode(WIFI_NONE_SLEEP);
   coreInit();                            // after the radio is on: its random numbers make the nonces
   wDownSince = millis();
   netShow();
