@@ -27,7 +27,8 @@
     G start   X stop at the top   ! stop now   + / - feed timing 10 ms later / earlier while running
     K one cut and park   H park   W watch the switch   ? status
     L length mm   Q stop at count   S speed mm/s   A accel mm/s2   O offset ms   T test rhythm ms
-    N set count (N0 = reset)   U length factor   V length offset mm   D park lead ms   E nudge ms
+    N set count (N0 = reset)   U length factor   V length offset mm
+    Parking:  D switch-off lead ms   E nudge ms (1-100)   P wait before the first nudge ms   B pause between nudges ms
     F / Fn feed test   C feed until X   R roller one turn   J jog mm   Z default settings
     I wifi status from the ESP8266: I<state>,<rssi>,<ip>,<ssid>,<cloud>
   Lines this sketch sends that start with $ are for the Wi-Fi module:  $AP open the setup hotspot,
@@ -50,11 +51,9 @@ const unsigned int CUT_TIMEOUT_MS   = 4000;
 const long  STEPS_PER_REV = 1600;   // TB6600 microstep setting
 const bool  LIMIT_PRESSED = LOW;    // switch connects pin 4 to GND when pressed
 const byte  COUNT_SAVE_EVERY = 5;   // while running, the count is written to memory every 5 pieces (and at every stop)
-const unsigned int SETTLE_MS = 300;
-const unsigned int NUDGE_SETTLE_MS = 180;
-const byte  MAX_NUDGES = 60;
+const byte  MAX_NUDGES = 80;
 const unsigned int PULSE_US = 8;
-#define VERSION_TEXT "5.1"
+#define VERSION_TEXT "5.2"
 
 // ---------------- settings kept in EEPROM ----------------
 struct Cfg {
@@ -75,8 +74,11 @@ struct Cfg {
   uint8_t  autoStart;  // 1 = start by itself 3 s after power-up
   uint8_t  tftType;    // screen board type 0..2
   uint8_t  tftFlip;    // screen turned 180 degrees
+  uint16_t waitMs;     // P  park: wait after the switch-off before the first nudge (the knife must have stopped)
+  uint16_t pauseMs;    // B  park: wait after each nudge
 };
-const Cfg DEFAULTS = { 70.0, 0, 1000.0, 6000.0, 20, 2000, 1.1494, -5.86, 60, 25, 30, 0, 0, 1, 0, 0, 0 };   // auto start is off until chosen on the screen
+const Cfg DEFAULTS = { 70.0, 0, 1000.0, 6000.0, 20, 2000, 1.1494, -5.86, 60, 25, 30, 0, 0, 1, 0, 0, 0, 800, 300 };   // auto start is off until chosen on the screen
+const byte CFG_OLD = sizeof(Cfg) - 4;   // settings saved by 5.1 had no P and B
 Cfg cfg;
 
 const uint16_t MAGIC = 0x5C05;
@@ -155,15 +157,19 @@ void saveCfg() {                         // EEPROM.put only writes the bytes tha
 bool cfgSane(const Cfg &c) {
   return c.pieceMm >= 5 && c.pieceMm <= 2000 && c.speed >= 30 && c.speed <= 2000 && c.accel >= 500 && c.accel <= 30000 &&
          c.offsetMs >= -500 && c.offsetMs <= 500 && c.testMs >= 200 && c.lenK >= 0.5 && c.lenK <= 1.5 &&
-         c.lenC >= -50 && c.lenC <= 50 && c.leadMs >= -100 && c.leadMs <= 400 && c.creepMs >= 5 && c.creepMs <= 100 &&
-         c.kLagMs >= -100 && c.kLagMs <= 300 && c.remote <= 1 && c.autoStart <= 1 && c.tftType <= 2 && c.tftFlip <= 1;
+         c.lenC >= -50 && c.lenC <= 50 && c.leadMs >= -100 && c.leadMs <= 400 && c.creepMs >= 1 && c.creepMs <= 100 &&
+         c.kLagMs >= -100 && c.kLagMs <= 300 && c.remote <= 1 && c.autoStart <= 1 && c.tftType <= 2 && c.tftFlip <= 1 &&
+         c.waitMs >= 100 && c.waitMs <= 5000 && c.pauseMs >= 50 && c.pauseMs <= 5000;
 }
 
 bool loadCfg() {
   uint16_t m; EEPROM.get(CFG_ADDR, m);
   if (m != MAGIC) return false;
   Cfg c; EEPROM.get(CFG_ADDR + 2, c);
-  if (EEPROM.read(CFG_ADDR + 2 + sizeof(Cfg)) != crc8((const byte *)&c, sizeof(Cfg)) || !cfgSane(c)) return false;
+  if (EEPROM.read(CFG_ADDR + 2 + sizeof(Cfg)) != crc8((const byte *)&c, sizeof(Cfg)) || !cfgSane(c)) {
+    c.waitMs = DEFAULTS.waitMs; c.pauseMs = DEFAULTS.pauseMs;          // kept by 5.1: the same, without P and B
+    if (EEPROM.read(CFG_ADDR + 2 + CFG_OLD) != crc8((const byte *)&c, CFG_OLD) || !cfgSane(c)) return false;
+  }
   cfg = c;
   return true;
 }
@@ -190,7 +196,11 @@ void saveCount() {                       // next slot in the ring, highest seque
   savedMade = made; savedTotal = total;
 }
 
-void sayCount() { Serial.print(F("#P ")); Serial.print(made); Serial.print(' '); Serial.println(total); uiDirty(D_COUNT); }
+void sp(long v) { Serial.print(' '); Serial.print(v); }           // " value" for the status lines
+void spf(float v, byte d) { Serial.print(' '); Serial.print(v, d); }
+void sayTop(bool s) { Serial.print(F("#T")); sp(s); Serial.println(); }
+void offStep(bool up) { cfg.offsetMs += up ? 10 : -10; Serial.print(F("#O")); sp(cfg.offsetMs); Serial.println(); uiDirty(D_INFO); }   // feed timing +/- 10 ms
+void sayCount() { Serial.print(F("#P")); sp(made); sp(total); Serial.println(); uiDirty(D_COUNT); }
 
 // ---------------- buzzer (optional) ----------------
 unsigned long buzzOff = 0;
@@ -343,7 +353,7 @@ void quickKeys() {                       // while something is running: stop key
     char c = lineBuf[0];
     if (c == 'X' || c == 'x') { stopAsked = true; Serial.println(F("stopping")); }
     else if (c == '!') { abortAsked = true; stopAsked = true; motor(false); }
-    else if ((c == '+' || c == '-') && running && cfg.remote) { cfg.offsetMs += c == '+' ? 10 : -10; Serial.print(F("#O ")); Serial.println(cfg.offsetMs); uiDirty(D_INFO); }
+    else if ((c == '+' || c == '-') && running && cfg.remote) offStep(c == '+');
     else if (c == 'I') wifiInfo(lineBuf + 1);
     else if (c != '?' && c != 'Y') Serial.println(F("busy"));
   }
@@ -353,9 +363,13 @@ void quickKeys() {                       // while something is running: stop key
 
 // ---------------- parking at the top ----------------
 // The cutter is running at speed. predPress = when the switch is expected to be pressed next (micros),
-// skip = presses that will come before that one. The motor is switched off D ms before predPress,
-// the knife coasts, and if it stops short, short nudges bring it onto the switch.
-// Result: 0 = coasted onto the switch, 1 = reached it with nudges, 2 = went past the top, 3 = stopped by ! or no switch
+// skip = presses that will come before that one. The motor is switched off D ms before predPress and the
+// knife coasts. P ms later (it must have stopped by then) it is on the switch, past it, or short of it.
+// Short of it: nudges of E ms, B ms apart. In a nudge the motor goes off the moment the switch closes,
+// so a long nudge cannot drive the knife on past the top; a nudge too short to move the knife grows
+// a little every second try.
+// Result: 0 = coasted onto the switch, 1 = reached it with nudges, 2 = went past the top, 3 = stopped by ! or no switch,
+//         4 = the nudges never reached the switch
 byte nudges = 0;
 bool lastEarly = false, nudgeOver = false;
 byte coastToTop(unsigned long predPress, byte skip) {
@@ -372,7 +386,7 @@ byte coastToTop(unsigned long predPress, byte skip) {
   motor(false);
   unsigned long tOff = micros();
   unsigned int pOff = pressCount, rOff = releaseCount;
-  watchFor(SETTLE_MS);
+  watchFor(cfg.waitMs);                  // let the knife stop before looking (and before any nudge)
   if (abortAsked) return 3;
   Serial.print(F("park: off ")); Serial.print((long)(predPress - tOff) / 1000L); Serial.print(F(" ms early"));
   if (lastEarly) Serial.print(F(", top came early"));
@@ -388,23 +402,33 @@ byte coastToTop(unsigned long predPress, byte skip) {
   }
   if (pressCount - p0 > skip) return 2;
   unsigned int on = cfg.creepMs;
+  byte touches = 0;
   for (nudges = 1; nudges <= MAX_NUDGES; nudges++) {
     unsigned int p1 = pressCount;
+    bool touched = false;
     motor(true);
-    watchFor(on);
+    unsigned long t = micros();
+    while (micros() - t < on * 1000UL) {           // the nudge, cut short the moment the switch closes
+      if (touches < 3 && LIMIT_RAW() == LIMIT_PRESSED) {
+        byte k = 0;                                  // closed for 0.4 ms, so motor noise on the wire does not count
+        while (k < 8 && LIMIT_RAW() == LIMIT_PRESSED) { delayMicroseconds(50); k++; }
+        if (k == 8) { touched = true; break; }
+      }
+    }
     motor(false);
-    watchFor(NUDGE_SETTLE_MS);
+    watchFor(cfg.pauseMs);
     if (abortAsked) return 3;
     if (swState) { watchFor(200); if (swState) return 1; }
     if (pressCount != p1) {
-      cfg.creepMs = cfg.creepMs * 2 / 3 < 5 ? 5 : cfg.creepMs * 2 / 3;
+      cfg.creepMs = cfg.creepMs * 2 / 3 ? cfg.creepMs * 2 / 3 : 1;
       nudgeOver = true;
-      Serial.print(F("park: nudge went over, now ")); Serial.print(cfg.creepMs); Serial.println(F(" ms"));
+      Serial.print(F("park: a nudge of ")); Serial.print(on); Serial.print(F(" ms went over, now ")); Serial.print(cfg.creepMs); Serial.println(F(" ms"));
       return 2;
     }
-    if (nudges % 6 == 0 && on < 60) on += 5;
+    if (touched) { on = cfg.creepMs; touches++; }  // right at the switch: keep the pushes small
+    else { touches = 0; if (!(nudges & 1) && on < 100) on += on / 4 + 1; }
   }
-  return 3;
+  return 4;
 }
 
 byte overRun = 0;
@@ -414,7 +438,8 @@ void learnFrom(byte r) {
   if (r == 0 && lastEarly) d = 5;
   else if (r == 2 && !nudgeOver) d = 25 * overRun;
   else if (r == 2 && nudgeOver) d = -5;
-  else if (r == 1 && nudges >= 2) { d = -4 * (nudges - 1); if (d < -15) d = -15; }
+  else if (r == 1 && nudges > 3) { d = -2 * (nudges - 3); if (d < -10) d = -10; }
+  else if (r == 4) d = -10;
   int n = cfg.leadMs + d;
   cfg.leadMs = n < -100 ? -100 : (n > 400 ? 400 : n);
 }
@@ -459,14 +484,15 @@ byte parkFinish(byte r) {
 }
 
 void parkReport(byte r) {
-  Serial.print(F("#K ")); Serial.print(r); Serial.print(' '); Serial.print(nudges);
-  Serial.print(' '); Serial.println(cfg.leadMs);
+  Serial.print(F("#K")); sp(r); sp(nudges); sp(cfg.leadMs); sp(cfg.creepMs); Serial.println();
   saveCfg();
 }
 
-void parkFault() {
-  if (nudgeOver) fault(F("Could not park at the top: even the shortest nudge carries the knife past the switch."));
-  else fault(F("Could not park at the top. Try a larger 'switch off before the top' (D)."));
+void parkFault(byte r) {
+  if (r == 3) fault(F("The knife did not reach the top: the limit switch was never pressed."));
+  else if (r == 4) fault(F("Could not park: the nudges never reached the switch. Raise Nudge (E)."));
+  else if (nudgeOver) fault(F("Could not park: even short nudges carry the knife over the switch."));
+  else fault(F("Could not park: the knife keeps coasting past the top. Raise Switch-off lead (D)."));
 }
 
 byte parkFromRun() {
@@ -500,11 +526,11 @@ bool parkFromRest(bool oneCut) {
   } else {
     r = parkViaRelease();
   }
-  if (r == 3 && !abortAsked) { fault(F("The knife did not reach the top: the limit switch was never pressed.")); return false; }
+  if (r == 3 && !abortAsked) { parkFault(3); return false; }
   r = parkFinish(r);
   if (abortAsked) { abortNow(); return false; }
   parkReport(r);
-  if (r > 1) { parkFault(); return false; }
+  if (r > 1) { parkFault(r); return false; }
   return true;
 }
 
@@ -622,7 +648,7 @@ void stopRun() {
   state(ST_PARK);
   byte r = parkFromRun();
   if (abortAsked) { abortNow(); return; }
-  if (r > 1) { parkFault(); return; }
+  if (r > 1) { parkFault(r); return; }
   finishRun();
 }
 
@@ -634,7 +660,7 @@ void runContinuous() {
     state(ST_IDLE);
     return;
   }
-  Serial.println(F("GO continuous - measuring the cutter for 3 turns"));
+  Serial.println(F("GO - measuring the cutter"));
   state(ST_MEASURE);
   sayCount();
   resetSwitchClock();
@@ -656,11 +682,10 @@ void runContinuous() {
   Serial.print(F(" ms, feed of ")); Serial.print(fl, 1);
   Serial.print(F(" mm takes ")); Serial.print(feedUs / 1000);
   Serial.print(F(" ms, knife open ")); Serial.print(openUs / 1000); Serial.println(F(" ms"));
-  Serial.print(F("#M ")); Serial.print(T0 / 1000); Serial.print(' '); Serial.print(pressedUs / 1000); Serial.print(' ');
-  Serial.print(feedUs / 1000); Serial.print(' '); Serial.println(openUs / 1000);
+  Serial.print(F("#M")); sp(T0 / 1000); sp(pressedUs / 1000); sp(feedUs / 1000); sp(openUs / 1000); Serial.println();
   uiDirty(D_INFO);
   if (feedUs > openUs) {
-    Serial.println(F("NOT STARTED: the feed takes longer than the knife is open. Raise A or S, or use a shorter piece."));
+    Serial.println(F("NOT STARTED: the feed is longer than the knife is open. Raise A or S."));
     note(F("Feed too slow for the cutter: raise acceleration."));
     stopRun();
     return;
@@ -713,8 +738,7 @@ void runContinuous() {
     if (made - savedMade >= COUNT_SAVE_EVERY) savePending = true;
     if (firstFeed) {
       firstFeed = false; feedRealMs = took / 1000;
-      Serial.print(F("#M ")); Serial.print(T0 / 1000); Serial.print(' '); Serial.print(pressedUs / 1000); Serial.print(' ');
-      Serial.print(feedUs / 1000); Serial.print(' '); Serial.print(openUs / 1000); Serial.print(' '); Serial.println(took / 1000);
+      Serial.print(F("#M")); sp(T0 / 1000); sp(pressedUs / 1000); sp(feedUs / 1000); sp(openUs / 1000); sp(took / 1000); Serial.println();
     }
 
     unsigned long w0 = millis();
@@ -766,7 +790,7 @@ void watchSwitch() {
   while (millis() - t0 < 10000) {
     bool s = atTop();
     pollSwitch();
-    if (s != last) { last = s; Serial.print(F("#T ")); Serial.println(s ? 1 : 0); uiDirty(D_INFO); }
+    if (s != last) { last = s; sayTop(s); uiDirty(D_INFO); }
     quickKeys(); uiDraw();
     if (stopAsked) break;
   }
@@ -777,13 +801,11 @@ void watchSwitch() {
 // ---------------- status for the PC / phone app ----------------
 void showStatus() {
   // length, target, speed, offset, test rhythm, made, knife at top, steps/mm, accel, factor, offset mm,
-  // park lead, nudge, one turn, remote allowed, auto start
-  Serial.print(F("#C ")); Serial.print(cfg.pieceMm, 1); Serial.print(' '); Serial.print(cfg.target); Serial.print(' ');
-  Serial.print(cfg.speed, 0); Serial.print(' '); Serial.print(cfg.offsetMs); Serial.print(' '); Serial.print(cfg.testMs); Serial.print(' ');
-  Serial.print(made); Serial.print(' '); Serial.print(swState ? 1 : 0); Serial.print(' '); Serial.print(STEPS_PER_MM, 2); Serial.print(' ');
-  Serial.print(cfg.accel, 0); Serial.print(' '); Serial.print(cfg.lenK, 4); Serial.print(' '); Serial.print(cfg.lenC, 2); Serial.print(' ');
-  Serial.print(cfg.leadMs); Serial.print(' '); Serial.print(cfg.creepMs); Serial.print(' '); Serial.print(cfg.turnMs); Serial.print(' ');
-  Serial.print(cfg.remote); Serial.print(' '); Serial.println(cfg.autoStart);
+  // park lead, nudge, one turn, remote allowed, auto start, wait before the first nudge, pause between nudges
+  Serial.print(F("#C")); spf(cfg.pieceMm, 1); sp(cfg.target); spf(cfg.speed, 0); sp(cfg.offsetMs); sp(cfg.testMs);
+  sp(made); sp(swState); spf(STEPS_PER_MM, 2); spf(cfg.accel, 0); spf(cfg.lenK, 4); spf(cfg.lenC, 2);
+  sp(cfg.leadMs); sp(cfg.creepMs); sp(cfg.turnMs); sp(cfg.remote); sp(cfg.autoStart); sp(cfg.waitMs); sp(cfg.pauseMs);
+  Serial.println();
 }
 
 void settingsChanged() { saveCfg(); showStatus(); uiDirty(D_ALL); }
@@ -810,7 +832,7 @@ void dispatch(char *s) {
   if (c == 'X') { Serial.println(F("nothing is running")); return; }
   if (!cfg.remote) {                       // the machine panel has locked remote control
     Serial.println(F("#R 0"));
-    Serial.println(F("LOCKED: remote control is switched off on the machine's screen (Wi-Fi & remote)."));
+    Serial.println(F("LOCKED: remote control is off on the machine's screen."));
     return;
   }
   if (c == 'G') runContinuous();
@@ -826,14 +848,16 @@ void dispatch(char *s) {
   else if (c == 'U' && v >= 0.5 && v <= 1.5) { cfg.lenK = v; settingsChanged(); }
   else if (c == 'V' && has && v >= -50 && v <= 50) { cfg.lenC = v; settingsChanged(); }
   else if (c == 'D' && has && v >= -100 && v <= 400) { cfg.leadMs = (int)v; settingsChanged(); }
-  else if (c == 'E' && v >= 5 && v <= 100) { cfg.creepMs = (unsigned int)v; settingsChanged(); }
+  else if (c == 'E' && v >= 1 && v <= 100) { cfg.creepMs = (unsigned int)v; settingsChanged(); }
+  else if (c == 'P' && v >= 100 && v <= 5000) { cfg.waitMs = (unsigned int)v; settingsChanged(); }
+  else if (c == 'B' && v >= 50 && v <= 5000) { cfg.pauseMs = (unsigned int)v; settingsChanged(); }
   else if (c == 'N' && has && n >= 0 && n <= 99999999L) { made = (uint32_t)n; saveCount(); sayCount(); showStatus(); }
   else if (c == 'Z') { Cfg k = cfg; cfg = DEFAULTS; cfg.turnMs = k.turnMs; cfg.gapMs = k.gapMs; cfg.leadMs = k.leadMs; cfg.tftType = k.tftType; cfg.tftFlip = k.tftFlip; Serial.println(F("default settings")); settingsChanged(); }
   else if (c == 'J' && has && v >= -500 && v <= 500) jog(v);
   else if (c == 'F' && v >= 0 && v <= 60000) feederTest(v < 1 ? 1 : (unsigned int)v);
   else if (c == 'C') feederTest(0);
   else if (c == 'R') rollerTurn();
-  else Serial.println(F("commands: G K H W ? L Q S A O T N U V D E Z J F C R"));
+  else Serial.println(F("unknown command or value out of range"));
 }
 
 void handleSerial() {
@@ -868,12 +892,12 @@ void setup() {
   uiSetup();                             // screen on, start-up picture
   Serial.println(F("#B 5"));
   Serial.println(F("Strip cutter v5 ready"));
-  if (!had) Serial.println(F("first start: default settings written"));
+  if (!had) Serial.println(F("default settings"));
   showStatus();
   sayCount();
   state(ST_IDLE);
   if (cfg.autoStart) {
-    Serial.println(F("starting by itself in 3 s - press a button or send a command to cancel"));
+    Serial.println(F("starting by itself in 3 s"));
     Serial.println(F("#A 3000"));
     if (uiAutoStartWait()) runContinuous();
     else Serial.println(F("automatic start cancelled"));
@@ -883,7 +907,7 @@ void setup() {
 void loop() {
   handleSerial();
   pollSwitch();
-  if ((char)swState != lastTop) { lastTop = swState; Serial.print(F("#T ")); Serial.println(swState ? 1 : 0); uiDirty(D_HEAD); }
+  if ((char)swState != lastTop) { lastTop = swState; sayTop(swState); uiDirty(D_HEAD); }
   buzzTick();
   uiIdle();
 }

@@ -80,6 +80,28 @@ Buttons on the v2 front panel:
 | DOWN | A2 | DOWN |
 | RIGHT | A3 | OK / START (hold 1 s to start) |
 
+## Parking the knife at the top
+
+On a stop, and after **One cut + park**, the motor switches off just before the top and the knife coasts up to the limit switch. If it stops short, short nudges bring it onto the switch.
+
+The settings are in the app (**Settings → Parking at the top**) and on the machine (**menu → Parking**):
+
+| Setting | Command | Range | What it does |
+|---|---|---|---|
+| Switch-off lead | D | −100 to 400 ms | The motor goes off this long before the top. The machine fine-tunes it after every stop. |
+| Nudge | E | 1 to 100 ms | One short push. It ends early the moment the switch closes. A nudge too short to move the knife gets a little longer every second try. |
+| Wait before nudging | P | 100 to 5000 ms (800) | The time after the switch-off before the machine looks where the knife is. The knife must have stopped coasting by then. |
+| Pause between nudges | B | 50 to 5000 ms (300) | The time after each nudge before the next one. |
+
+To tune it:
+
+1. Press **One cut + park** a few times.
+2. Watch the **Last stop** line and the parking log in the app.
+3. If the knife is still creeping when the nudges start, raise **Wait before nudging**.
+4. If it keeps going past the top, raise **Switch-off lead**.
+
+A relay needs a few milliseconds to pull in, so very short nudges may do nothing. The machine lengthens them by itself until they move the knife.
+
 ## Using the app from anywhere
 
 The machine keeps one connection open to a free MQTT cloud server (for example a HiveMQ Cloud *Serverless* cluster). The online app connects to the same server.

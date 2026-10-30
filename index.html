@@ -183,6 +183,8 @@ label.chk input { margin-top: 3px; }
 .log .err { color: #ffb4a8; }
 .log .app { color: #c8b6ff; }
 .log .old { opacity: .55; }
+#parkNote2.bad { color: var(--redlite); }
+.parklog { margin: 10px 0 0; max-height: 170px; overflow: auto; background: #080b0c; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word; color: var(--dim); }
 .cmdline { display: flex; gap: 8px; margin-top: 8px; }
 .cmdline input { flex: 1; text-align: left; width: auto; }
 
@@ -369,14 +371,24 @@ dialog p { margin: 6px 0 10px; color: var(--dim); font-size: 14px; }
             <p class="small" id="calOut"></p>
           </details>
         </div>
+        <div class="card" id="parkCard">
+          <h2>Parking at the top</h2>
+          <p class="small muted">On a stop, and after one cut, the motor switches off just before the top and the knife coasts up to the switch. If it stops short, short nudges bring it onto the switch.</p>
+          <div class="field"><label for="sD">Switch-off lead</label><div class="hint">motor off this long before the top. The machine fine-tunes it after every stop</div>
+            <div class="ctl"><input type="number" id="sD" min="-100" max="400" step="5" data-cmd="D" data-dp="0"><span class="u">ms</span></div></div>
+          <div class="field"><label for="sE">Nudge</label><div class="hint">one short push, 1 to 100 ms. It ends early the moment the switch closes</div>
+            <div class="ctl"><input type="number" id="sE" min="1" max="100" step="1" data-cmd="E" data-dp="0"><span class="u">ms</span></div></div>
+          <div class="field"><label for="sP">Wait before nudging</label><div class="hint">after the switch-off, so the knife has stopped coasting</div>
+            <div class="ctl"><input type="number" id="sP" min="100" max="5000" step="50" data-cmd="P" data-dp="0"><span class="u">ms</span></div></div>
+          <div class="field"><label for="sB">Pause between nudges</label><div class="hint">the knife settles before the next nudge</div>
+            <div class="ctl"><input type="number" id="sB" min="50" max="5000" step="50" data-cmd="B" data-dp="0"><span class="u">ms</span></div></div>
+          <p class="small muted" id="parkOld" hidden>This machine has an older sketch: load FeedCutHMI 5.2 for the two waits and for nudges shorter than 5 ms.</p>
+          <p class="small" id="parkNote2">Last stop: none yet.</p>
+          <div class="row"><button class="btn ctrl" id="pK">One cut + park</button><button class="btn ctrl" id="pH">Park the knife</button></div>
+          <pre class="parklog" id="parkLog" hidden></pre>
+        </div>
         <div class="card">
-          <details class="adv"><summary>Parking at the top (learnt by itself)</summary>
-            <div class="field"><label for="sD">Switch-off lead</label><div class="hint">motor off this long before the top</div>
-              <div class="ctl"><input type="number" id="sD" min="-100" max="400" step="5" data-cmd="D" data-dp="0"><span class="u">ms</span></div></div>
-            <div class="field"><label for="sE">Nudge</label><div class="hint">one short push if it stops short</div>
-              <div class="ctl"><input type="number" id="sE" min="5" max="100" step="1" data-cmd="E" data-dp="0"><span class="u">ms</span></div></div>
-          </details>
-          <div class="row" style="margin-top:10px"><button class="btn warn ctrl" id="btnDefaults">Factory settings</button></div>
+          <div class="row"><button class="btn warn ctrl" id="btnDefaults">Factory settings</button><span class="small muted">The piece count and the switch-off lead stay.</span></div>
         </div>
       </div>
     </div>
@@ -487,7 +499,7 @@ dialog p { margin: 6px 0 10px; color: var(--dim); font-size: 14px; }
         <button class="btn sm" id="btnSave">Save</button><button class="btn sm" id="btnClear">Clear</button></h2>
       <div class="log" id="log" role="log"></div>
       <div class="cmdline"><input class="inp" id="cmd" placeholder="command, e.g. L75 or ?" autocomplete="off" autocapitalize="off" spellcheck="false"><button class="btn" id="btnSend">Send</button></div>
-      <p class="small muted">Commands are framed (@L75*hh) by the app. G start · X stop · ! stop now · L length · Q stop count · S speed · A accel · O timing · N count · F feed · H park · ? status</p>
+      <p class="small muted">Commands are framed (@L75*hh) by the app. G start · X stop · ! stop now · L length · Q stop count · S speed · A accel · O timing · N count · F feed · K one cut · H park · D switch-off lead · E nudge · P wait before nudging · B pause between nudges · ? status</p>
     </div>
   </section>
 </main>
@@ -779,7 +791,7 @@ const SMAP = { IDLE: 'idle', MEASURE: 'measure', RUN: 'run', FEEDTEST: 'test', C
 const busy = () => !['idle', 'fault', 'off', 'link', 'boot'].includes(S.state);
 const remoteOk = () => !S.cfg || S.cfg.remote !== 0;
 const canCtl = () => S.up && S.fw && remoteOk() && !busy() && S.state !== 'boot';
-const FIELDS = ['sL', 'sQ', 'sS', 'sA', 'sO', 'sT', 'sU', 'sV', 'sD', 'sE'];
+const FIELDS = ['sL', 'sQ', 'sS', 'sA', 'sO', 'sT', 'sU', 'sV', 'sD', 'sE', 'sP', 'sB'];
 
 // ============================================================ log, toast, banners
 const logLines = [];
@@ -849,6 +861,10 @@ function onLine(l) {
   else if (/^LOCKED/.test(l)) toast('Remote control is switched off on the machine\'s screen.', true);
   else if (/^automatic start cancelled/.test(l)) { S.autoUntil = 0; banner('auto'); }
   else if (/^stopping$/.test(l)) toast('Stopping after this piece…');
+  if (/^(park: |went past the top|already at the top)/.test(l) && !S.replay) {
+    S.parkLog = (S.parkLog || []).concat(new Date().toLocaleTimeString() + '  ' + l).slice(-12);
+    $('parkLog').textContent = S.parkLog.join('\n'); $('parkLog').hidden = false; $('parkLog').scrollTop = 1e6;
+  }
 }
 function onStatus(l) {
   const p = l.slice(1).trim().split(/\s+/), k = p[0];
@@ -872,6 +888,8 @@ function onStatus(l) {
     const c = { L: +p[1], Q: +p[2], S: +p[3], O: +p[4], T: +p[5] };
     if (p.length >= 15) Object.assign(c, { A: +p[9], U: +p[10], V: +p[11], D: +p[12], E: +p[13], turn: +p[14] });
     if (p.length >= 17) Object.assign(c, { remote: +p[15], auto: +p[16] });
+    if (p.length >= 19) Object.assign(c, { P: +p[17], B: +p[18] });
+    $('parkOld').hidden = p.length >= 19;
     S.cfg = c; S.made = +p[6]; S.top = p[7] === '1';
     if (S.state === 'boot' || S.state === 'link') S.state = 'idle';
     fillInputs();
@@ -883,9 +901,12 @@ function onStatus(l) {
   else if (k === 'A') onAutoStart(+p[1] || 3000);
   else if (k === 'R') toast('Refused: remote control is switched off on the machine\'s screen.', true);
   else if (k === 'K') {
-    const r = +p[1], n = +p[2], lead = +p[3];
-    if (S.cfg) { S.cfg.D = lead; fillInputs(); }
-    $('parkNote').textContent = 'Last stop: ' + (r === 0 ? 'coasted onto the top' : r === 1 ? 'reached the top with ' + n + ' nudge' + (n === 1 ? '' : 's') : r === 2 ? 'went past the top' : 'stopped') + '. Motor now switches off ' + lead + ' ms before the top.';
+    const r = +p[1], n = +p[2], lead = +p[3], nudge = p[4] !== undefined ? +p[4] : undefined;
+    if (S.cfg) { S.cfg.D = lead; if (nudge !== undefined) S.cfg.E = nudge; fillInputs(); }
+    const t = 'Last stop: ' + (r === 0 ? 'coasted onto the top' : r === 1 ? 'reached the top with ' + n + ' nudge' + (n === 1 ? '' : 's') : r === 2 ? 'went past the top' : r === 4 ? 'the nudges did not reach the top' : 'stopped') +
+      '. The motor now switches off ' + lead + ' ms before the top' + (nudge !== undefined ? ', nudge ' + nudge + ' ms.' : '.');
+    $('parkNote').textContent = t; $('parkNote2').textContent = t;
+    $('parkNote2').classList.toggle('bad', r > 1);
   }
 }
 const toTop = () => window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1082,7 +1103,7 @@ $('btnApply').onclick = () => {
   $('applyNote').textContent = 'Sent. The machine keeps them after a power cut.';
 };
 $('btnUndo').onclick = () => { fillInputs(true); $('applyNote').textContent = ''; render(); };
-$('btnDefaults').onclick = () => { if (confirm('Put all settings back to the factory values? (The piece count and the learnt parking stay.)')) control('Z'); };
+$('btnDefaults').onclick = () => { if (confirm('Put all settings back to the factory values? (The piece count and the switch-off lead stay.)')) control('Z'); };
 $('btnCalc').onclick = () => {
   const out = $('calOut');
   if (!S.cfg || S.cfg.U === undefined) { out.textContent = 'Connect to the machine first: the calculation starts from the correction it has now.'; return; }
@@ -1132,8 +1153,8 @@ $('tR').onclick = () => control('R');
 $('tFn').onclick = () => { const n = Math.round(+$('nFeed').value); if (n >= 1 && n <= 60000) control('F' + n); else toast('Pieces to feed: 1 to 60000.', true); };
 const jog = s => { const d = Math.round(+$('jogMm').value); if (d >= 1 && d <= 500) control('J' + s * d); else toast('Jog: 1 to 500 mm.', true); };
 $('tJf').onclick = () => jog(1); $('tJb').onclick = () => jog(-1);
-$('tK').onclick = () => control('K');
-$('tH').onclick = () => control('H');
+$('tK').onclick = $('pK').onclick = () => control('K');
+$('tH').onclick = $('pH').onclick = () => control('H');
 $('tW').onclick = () => control('W');
 
 // ============================================================ Wi-Fi page

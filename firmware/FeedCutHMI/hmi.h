@@ -46,7 +46,7 @@ byte holdMult() { unsigned long h = millis() - btnDownMs; return h < 1500 ? 1 : 
 // ---------------- menus ----------------
 enum { K_VAL, K_ACT, K_SUB, K_INFO, K_TOG };
 enum {   // values
-  V_L, V_Q, V_N, V_S, V_A, V_O, V_T, V_U, V_V, V_D, V_E, V_TFT,
+  V_L, V_Q, V_N, V_S, V_A, V_O, V_T, V_U, V_V, V_D, V_E, V_P, V_B, V_TFT,
   // toggles
   T_REMOTE, T_AUTO, T_FLIP,
   // read-only
@@ -63,7 +63,7 @@ MI(L_S, "Feed speed") MI(L_A, "Acceleration") MI(L_O, "Feed timing") MI(L_TESTS,
 MI(L_PARK, "Parking") MI(L_WIFI, "Wi-Fi & remote") MI(L_MACH, "Machine")
 MI(L_F1, "Feed one piece") MI(L_FC, "Feed until STOP") MI(L_K, "One cut + park") MI(L_H, "Park the knife")
 MI(L_JF, "Jog net +10 mm") MI(L_JB, "Jog net -10 mm") MI(L_R, "Roller one turn") MI(L_W, "Switch test")
-MI(L_U, "Factor") MI(L_V, "Offset") MI(L_D, "Switch-off lead") MI(L_E, "Nudge")
+MI(L_U, "Factor") MI(L_V, "Offset") MI(L_D, "Switch-off lead") MI(L_E, "Nudge") MI(L_P, "Wait to nudge") MI(L_B, "Between nudges")
 MI(L_WST, "Status") MI(L_SSID, "Network") MI(L_IP, "Address") MI(L_RSSI, "Signal") MI(L_CLOUD, "Cloud")
 MI(L_WDET, "Wi-Fi details") MI(L_REM, "Remote control") MI(L_AP, "Setup hotspot") MI(L_FORGET, "Forget Wi-Fi") MI(L_AUTO, "Auto start") MI(L_T, "Test rhythm") MI(L_TURN, "One turn") MI(L_TOT, "Total pieces")
 MI(L_TFT, "Screen type") MI(L_FLIP, "Flip screen") MI(L_DEF, "Factory settings") MI(L_VER, "Version")
@@ -77,7 +77,7 @@ const MItem TEST_ITEMS[] PROGMEM = {
   {L_F1, K_ACT, A_F1}, {L_FC, K_ACT, A_FC}, {L_K, K_ACT, A_K}, {L_H, K_ACT, A_H},
   {L_JF, K_ACT, A_JF}, {L_JB, K_ACT, A_JB}, {L_R, K_ACT, A_R}, {L_W, K_ACT, A_W} };
 const MItem CORR_ITEMS[] PROGMEM = { {L_U, K_VAL, V_U}, {L_V, K_VAL, V_V} };
-const MItem PARK_ITEMS[] PROGMEM = { {L_D, K_VAL, V_D}, {L_E, K_VAL, V_E}, {L_H, K_ACT, A_H} };
+const MItem PARK_ITEMS[] PROGMEM = { {L_D, K_VAL, V_D}, {L_E, K_VAL, V_E}, {L_P, K_VAL, V_P}, {L_B, K_VAL, V_B}, {L_K, K_ACT, A_K}, {L_H, K_ACT, A_H} };
 const MItem WIFI_ITEMS[] PROGMEM = {
   {L_WDET, K_ACT, A_WDET}, {L_WST, K_INFO, I_WIFI}, {L_SSID, K_INFO, I_SSID}, {L_IP, K_INFO, I_IP}, {L_RSSI, K_INFO, I_RSSI},
   {L_CLOUD, K_INFO, I_CLOUD}, {L_REM, K_TOG, T_REMOTE}, {L_AP, K_ACT, A_AP}, {L_FORGET, K_ACT, A_FORGET} };
@@ -88,7 +88,7 @@ const MItem MACH_ITEMS[] PROGMEM = {
 struct Menu { const char *title; const MItem *items; uint8_t n; };
 const Menu MENUS[] PROGMEM = {
   {L_SETTINGS, MAIN_ITEMS, 13}, {L_TESTS, TEST_ITEMS, 8}, {L_CORR, CORR_ITEMS, 2},
-  {L_PARK, PARK_ITEMS, 3}, {L_WIFI, WIFI_ITEMS, 9}, {L_MACH, MACH_ITEMS, 8} };
+  {L_PARK, PARK_ITEMS, 6}, {L_WIFI, WIFI_ITEMS, 9}, {L_MACH, MACH_ITEMS, 8} };
 
 // ---------------- page state ----------------
 enum { SC_HOME, SC_MENU, SC_EDIT, SC_CONFIRM, SC_FAULT, SC_WIFI };
@@ -127,7 +127,9 @@ VMeta valMeta(byte id) {
     case V_U:   return { 0.5, 1.5, 0.001, 4, U_NONE };
     case V_V:   return { -50, 50, 0.1, 2, U_MM };
     case V_D:   return { -100, 400, 5, 0, U_MS };
-    case V_E:   return { 5, 100, 1, 0, U_MS };
+    case V_E:   return { 1, 100, 1, 0, U_MS };
+    case V_P:   return { 100, 5000, 50, 0, U_MS };
+    case V_B:   return { 50, 5000, 50, 0, U_MS };
     default:    return { 1, 3, 1, 0, U_NONE };            // V_TFT
   }
 }
@@ -136,7 +138,8 @@ float valGet(byte id) {
     case V_L: return cfg.pieceMm;   case V_Q: return cfg.target;   case V_N: return made;
     case V_S: return cfg.speed;     case V_A: return cfg.accel;    case V_O: return cfg.offsetMs;
     case V_T: return cfg.testMs;    case V_U: return cfg.lenK;     case V_V: return cfg.lenC;
-    case V_D: return cfg.leadMs;    case V_E: return cfg.creepMs;  default: return cfg.tftType + 1;
+    case V_D: return cfg.leadMs;    case V_E: return cfg.creepMs;  case V_P: return cfg.waitMs;
+    case V_B: return cfg.pauseMs;   default: return cfg.tftType + 1;
   }
 }
 void valSet(byte id, float v) {
@@ -147,6 +150,7 @@ void valSet(byte id, float v) {
     case V_S: cfg.speed = v; break;     case V_A: cfg.accel = v; break;     case V_O: cfg.offsetMs = n; break;
     case V_T: cfg.testMs = n; break;    case V_U: cfg.lenK = v; break;      case V_V: cfg.lenC = v; break;
     case V_D: cfg.leadMs = n; break;    case V_E: cfg.creepMs = n; break;
+    case V_P: cfg.waitMs = n; break;    case V_B: cfg.pauseMs = n; break;
     case V_TFT: cfg.tftType = n - 1; tftType = cfg.tftType; tftSetRotation(); break;
   }
   settingsChanged();
@@ -480,9 +484,7 @@ void uiBusyButtons() {                   // while something runs: STOP and the t
     beep(30);
     dirty |= D_HEAD | D_FOOT;
   } else if ((e == E_UP || e == E_DOWN) && (curState == ST_RUN || curState == ST_MEASURE)) {
-    cfg.offsetMs += e == E_UP ? 10 : -10;
-    Serial.print(F("#O ")); Serial.println(cfg.offsetMs);
-    dirty |= D_INFO;
+    offStep(e == E_UP);
   }
 }
 

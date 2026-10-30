@@ -27,7 +27,7 @@
 #include <ctype.h>
 #include <stdarg.h>
 
-#define ESP_VERSION "1.5"
+#define ESP_VERSION "1.6"
 #define MAX_NETS 8
 #define MAX_WS 5                     // WebSocket clients (the library's limit on the ESP8266)
 #define CLOUD_ID 9                   // client number used for the cloud link
@@ -178,8 +178,8 @@ static bool cloudUp = false;
 static uint8_t badAuth = 0; static uint32_t badAuthAt = 0;
 
 // what the ATmega said last (sent to every app that connects)
-static const char CACHE_TAGS[] = "BCSPTMF";          // #B version, #C settings, #S state, #P count, #T knife, #M timing, #F test feeds
-#define NCACHE 7
+static const char CACHE_TAGS[] = "BCSPTMFK";         // #B version, #C settings, #S state, #P count, #T knife, #M timing, #F test feeds, #K last park
+#define NCACHE 8
 static char cacheLine[NCACHE][110];
 static char lastNote[LINE_MAX];                        // last NOTE / STOPPED / LOCKED / NOT STARTED line
 static uint32_t avrSeenAt = 0, avrBootAt = 0, lastProbe = 0;
@@ -303,9 +303,9 @@ static const char *lJson() {
 static const char *snapText() {               // everything a new app needs to draw the machine
   size_t n = snprintf(outBuf, sizeof(outBuf), "$SNAP 1\n");
   for (uint8_t i = 0; i < NCACHE; i++)
-    if (cacheLine[i][0]) n += snprintf(outBuf + n, sizeof(outBuf) - n, "%s\n", cacheLine[i]);
-  if (lastNote[0]) n += snprintf(outBuf + n, sizeof(outBuf) - n, "%.150s\n", lastNote);
-  snprintf(outBuf + n, sizeof(outBuf) - n, "%s\n$SNAP 0", wJson());
+    if (cacheLine[i][0] && n < sizeof(outBuf)) n += snprintf(outBuf + n, sizeof(outBuf) - n, "%s\n", cacheLine[i]);
+  if (lastNote[0] && n < sizeof(outBuf)) n += snprintf(outBuf + n, sizeof(outBuf) - n, "%.150s\n", lastNote);
+  if (n < sizeof(outBuf)) snprintf(outBuf + n, sizeof(outBuf) - n, "%s\n$SNAP 0", wJson());
   return outBuf;
 }
 
@@ -693,7 +693,7 @@ static void avrLine(char *line) {
   if (line[0] == '#' && line[1] && (line[2] == ' ' || line[2] == 0)) {
     const char *t = strchr(CACHE_TAGS, line[1]);
     if (t) { strncpy(cacheLine[t - CACHE_TAGS], line, 109); cacheLine[t - CACHE_TAGS][109] = 0; snapDirty = true; }
-    if (line[1] == 'B') { avrBootAt = now; lastNote[0] = 0; cacheLine[6][0] = 0; }
+    if (line[1] == 'B') { avrBootAt = now; lastNote[0] = 0; cacheLine[6][0] = 0; cacheLine[7][0] = 0; }
     if (line[1] == 'S' && (!strcmp(line + 3, "MEASURE") || !strcmp(line + 3, "FEEDTEST") || !strcmp(line + 3, "CUT") || !strcmp(line + 3, "JOG") || !strcmp(line + 3, "WATCH")))
       lastNote[0] = 0;                       // a new job: the last note is old news
   } else if (!strncmp(line, "NOTE:", 5) || !strncmp(line, "STOPPED", 7) || !strncmp(line, "NOT STARTED", 11) || !strncmp(line, "LOCKED", 6) || !strncmp(line, "FAULT", 5)) {
