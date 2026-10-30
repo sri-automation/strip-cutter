@@ -53,7 +53,7 @@ const bool  LIMIT_PRESSED = LOW;    // switch connects pin 4 to GND when pressed
 const byte  COUNT_SAVE_EVERY = 5;   // while running, the count is written to memory every 5 pieces (and at every stop)
 const byte  MAX_NUDGES = 80;
 const unsigned int PULSE_US = 8;
-#define VERSION_TEXT "5.2"
+#define VERSION_TEXT "5.3"
 
 // ---------------- settings kept in EEPROM ----------------
 struct Cfg {
@@ -476,7 +476,7 @@ byte parkFinish(byte r) {
   byte tries = 0;
   while (r == 2 && tries < 6) {
     tries++;
-    Serial.print(F("went past the top, round once more (lead ")); Serial.print(cfg.leadMs); Serial.println(F(" ms)"));
+    Serial.print(F("past the top, round again (lead ")); Serial.print(cfg.leadMs); Serial.println(F(" ms)"));
     motor(true);
     r = parkViaRelease();
   }
@@ -489,10 +489,10 @@ void parkReport(byte r) {
 }
 
 void parkFault(byte r) {
-  if (r == 3) fault(F("The knife did not reach the top: the limit switch was never pressed."));
-  else if (r == 4) fault(F("Could not park: the nudges never reached the switch. Raise Nudge (E)."));
+  if (r == 3) fault(F("The knife never reached the top: switch not pressed."));
+  else if (r == 4) fault(F("Could not park: nudges never reached the top. Raise Nudge (E)."));
   else if (nudgeOver) fault(F("Could not park: even short nudges carry the knife over the switch."));
-  else fault(F("Could not park: the knife keeps coasting past the top. Raise Switch-off lead (D)."));
+  else fault(F("Could not park: it keeps coasting past the top. Raise lead (D)."));
 }
 
 byte parkFromRun() {
@@ -516,7 +516,7 @@ bool parkFromRest(bool oneCut) {
   if (swState) {
     if (!waitEdge(false)) {
       motor(false);
-      if (abortAsked) abortNow(); else fault(F("Limit switch stays pressed with the motor on: motor not turning, or switch wiring."));
+      if (abortAsked) abortNow(); else fault(F("Switch stays pressed with the motor on: motor or switch wiring?"));
       return false;
     }
     if (cfg.gapMs) {
@@ -655,7 +655,7 @@ void stopRun() {
 void runContinuous() {
   wantSteps = 0; doneSteps = 0; stopAsked = false; abortAsked = false; noteMsg = 0; faultMsg = 0;
   if (targetReached()) {
-    Serial.println(F("NOT STARTED: the count has reached the stop count."));
+    Serial.println(F("NOT STARTED: stop count reached."));
     note(F("Count reached the stop count. Reset the count or raise it."));
     state(ST_IDLE);
     return;
@@ -667,7 +667,7 @@ void runContinuous() {
   motor(true);
   if (!waitPresses(1, (unsigned long)LEAVE_TIMEOUT_MS + CUT_TIMEOUT_MS) || !waitPresses(3, 2UL * CUT_TIMEOUT_MS)) {
     if (abortAsked) abortNow();
-    else fault(F("No limit switch signal while the motor runs: motor not turning, or switch wiring."));
+    else fault(F("No switch signal while the motor runs: motor or switch wiring?"));
     return;
   }
   const unsigned long T0 = periodUs;
@@ -677,12 +677,7 @@ void runContinuous() {
   cfg.turnMs = T0 / 1000UL;
   cfg.gapMs = (T0 - pressedUs) / 1000UL;
   feedPlanMs = feedUs / 1000; openMs = openUs / 1000; feedRealMs = 0;
-  Serial.print(F("one turn ")); Serial.print(T0 / 1000);
-  Serial.print(F(" ms, switch pressed ")); Serial.print(pressedUs / 1000);
-  Serial.print(F(" ms, feed of ")); Serial.print(fl, 1);
-  Serial.print(F(" mm takes ")); Serial.print(feedUs / 1000);
-  Serial.print(F(" ms, knife open ")); Serial.print(openUs / 1000); Serial.println(F(" ms"));
-  Serial.print(F("#M")); sp(T0 / 1000); sp(pressedUs / 1000); sp(feedUs / 1000); sp(openUs / 1000); Serial.println();
+  Serial.print(F("#M"));                // one turn, switch pressed, feed, knife open (ms) sp(T0 / 1000); sp(pressedUs / 1000); sp(feedUs / 1000); sp(openUs / 1000); Serial.println();
   uiDirty(D_INFO);
   if (feedUs > openUs) {
     Serial.println(F("NOT STARTED: the feed is longer than the knife is open. Raise A or S."));
@@ -698,7 +693,8 @@ void runContinuous() {
   if (stopAsked) { stopRun(); return; }
   running = true;
   state(ST_RUN);
-  byte missed = 0;
+  byte missed = 0, slow = 0;
+  unsigned long Tp = T0;                 // the usual turn: follows slow changes, not a single slow (hard) cut
   bool firstFeed = true, savePending = false;
   unsigned long lastPieceMs = 0;
 
@@ -706,16 +702,20 @@ void runContinuous() {
     if (stopAsked || targetReached()) break;
     unsigned int edge = pressCount;
     unsigned long T = periodUs;
-    if (T > T0 + T0 / 2 || T < T0 / 2) { fault(F("The cutter speed changed a lot: jam, or switch bouncing.")); return; }
+    if (T > Tp + Tp / 2) {               // a slow turn (a hard cut): logged, and the next feed is timed from the usual turn
+      Serial.print(F("run: slow turn ")); Serial.print(T / 1000); Serial.print(F(" ms, usual ")); Serial.println(Tp / 1000);
+      if (++slow > 2) T = 0;             // three in a row: stop
+    } else { slow = 0; Tp = (3 * Tp + T) / 4; }
+    if (T > 3 * T0 || T < T0 / 2 || Tp > T0 + T0 / 2) { fault(F("Cutter speed changed a lot: jam, hard cuts, weak 12 V supply?")); return; }
 
-    unsigned long startUs = tPressUs + pressedUs / 2 + T - feedUs / 2 + (long)cfg.offsetMs * 1000L;
+    unsigned long startUs = tPressUs + pressedUs / 2 + Tp - feedUs / 2 + (long)cfg.offsetMs * 1000L;
     while ((long)(micros() - startUs) < 0) {
       pollSwitch();
       quickKeys();
       if (abortAsked) { abortNow(); return; }
       if (stopAsked) break;
-      if (micros() - tPressUs > T + T / 2) { fault(F("No limit switch signal for too long: cutter stalled?")); return; }
-      if (micros() - tPressUs > T / 2 && (long)(startUs - micros()) > 60000L) {      // mid-turn: nothing to time
+      if (micros() - tPressUs > Tp + Tp / 2) { fault(F("No limit switch signal for too long: cutter stalled?")); return; }
+      if (micros() - tPressUs > Tp / 2 && (long)(startUs - micros()) > 60000L) {      // mid-turn: nothing to time
         if (savePending) { saveCount(); savePending = false; }
         else uiDraw();
       }
@@ -746,11 +746,12 @@ void runContinuous() {
       pollSwitch();
       quickKeys();
       if (abortAsked) { abortNow(); return; }
-      if (millis() - w0 > T / 2000) { fault(F("Limit switch not pressed after the feed: cutter stalled?")); return; }
+      if (millis() - w0 > Tp / 500) { fault(F("Limit switch not pressed after the feed: cutter stalled?")); return; }   // 2 turns
     }
   }
   running = false;
   rateNow = 0;
+  periodUs = Tp;                         // park from the usual turn, not from a slow last cut
   stopRun();
 }
 

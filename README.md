@@ -102,6 +102,22 @@ To tune it:
 
 A relay needs a few milliseconds to pull in, so very short nudges may do nothing. The machine lengthens them by itself until they move the knife.
 
+## When it stops with "cutter stalled" or "speed changed a lot"
+
+While cutting, the machine times every feed from the turns before it. A turn much slower than usual is logged as `run: slow turn 1630 ms, usual 848`, and the app shows the count on the Run page.
+
+| Log shows | Usually means |
+|---|---|
+| An occasional turn 1.5 to 3 times the usual | A hard cut, or the 12 V supply dipping under the wiper motor's load. The machine carries on, timing the next feed from the usual turn. |
+| A turn about twice the usual | The limit switch missed one press. |
+| Three slow turns in a row, a turn over 3 times the usual, or no switch for 2 turns | The machine stops. |
+
+**Check:**
+
+- The 12 V supply can deliver the wiper motor's current under load. A separate supply for the stepper driver helps.
+- The knife is sharp and set with the right clearance.
+- Nothing binds in the crank.
+
 ## Using the app from anywhere
 
 The machine keeps one connection open to a free MQTT cloud server (for example a HiveMQ Cloud *Serverless* cluster). The online app connects to the same server.

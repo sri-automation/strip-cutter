@@ -325,6 +325,7 @@ dialog p { margin: 6px 0 10px; color: var(--dim); font-size: 14px; }
           <div class="tlegend"><span>knife closing</span><span>top</span><span>knife closing</span></div>
           <p class="small muted" id="timingNote">Shown after the cutter has been measured (first three turns of a run).</p>
           <p class="small muted" id="parkNote"></p>
+          <p class="small why bad" id="slowNote" hidden></p>
         </div>
       </div>
     </div>
@@ -382,7 +383,7 @@ dialog p { margin: 6px 0 10px; color: var(--dim); font-size: 14px; }
             <div class="ctl"><input type="number" id="sP" min="100" max="5000" step="50" data-cmd="P" data-dp="0"><span class="u">ms</span></div></div>
           <div class="field"><label for="sB">Pause between nudges</label><div class="hint">the knife settles before the next nudge</div>
             <div class="ctl"><input type="number" id="sB" min="50" max="5000" step="50" data-cmd="B" data-dp="0"><span class="u">ms</span></div></div>
-          <p class="small muted" id="parkOld" hidden>This machine has an older sketch: load FeedCutHMI 5.2 for the two waits and for nudges shorter than 5 ms.</p>
+          <p class="small muted" id="parkOld" hidden>This machine has an older sketch: load FeedCutHMI 5.2 or later for the two waits and for nudges shorter than 5 ms.</p>
           <p class="small" id="parkNote2">Last stop: none yet.</p>
           <div class="row"><button class="btn ctrl" id="pK">One cut + park</button><button class="btn ctrl" id="pH">Park the knife</button></div>
           <pre class="parklog" id="parkLog" hidden></pre>
@@ -861,7 +862,13 @@ function onLine(l) {
   else if (/^LOCKED/.test(l)) toast('Remote control is switched off on the machine\'s screen.', true);
   else if (/^automatic start cancelled/.test(l)) { S.autoUntil = 0; banner('auto'); }
   else if (/^stopping$/.test(l)) toast('Stopping after this piece…');
-  if (/^(park: |went past the top|already at the top)/.test(l) && !S.replay) {
+  const sl = /^run: slow turn (\d+) ms, usual (\d+)/.exec(l);
+  if (sl && !S.replay) {
+    S.slow = (S.slow || 0) + 1;
+    $('slowNote').textContent = 'Slow turns this run: ' + S.slow + ' (last ' + sl[1] + ' ms, usually ' + sl[2] + ' ms). A slow turn is a hard cut, or the 12 V supply dipping; one about twice the usual is a missed switch press.';
+    $('slowNote').hidden = false;
+  }
+  if (/^(park: |past the top|went past the top|already at the top)/.test(l) && !S.replay) {
     S.parkLog = (S.parkLog || []).concat(new Date().toLocaleTimeString() + '  ' + l).slice(-12);
     $('parkLog').textContent = S.parkLog.join('\n'); $('parkLog').hidden = false; $('parkLog').scrollTop = 1e6;
   }
@@ -872,6 +879,7 @@ function onStatus(l) {
   else if (k === 'S') {
     const st = SMAP[p[1]] || 'idle';
     if (st === 'measure' || st === 'test') { S.pieceTimes = []; if (st === 'test') S.testMade = 0; }
+    if (st === 'measure') { S.slow = 0; $('slowNote').hidden = true; }
     if (['measure', 'test', 'cut', 'jog', 'watch'].includes(st)) { banner('fault'); banner('note'); S.faultText = ''; }
     if (st === 'fault' && !S.replay) toTop();
     if (st !== 'idle' && st !== 'fault') { S.autoUntil = 0; banner('auto'); }
